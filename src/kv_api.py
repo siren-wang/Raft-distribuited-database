@@ -214,8 +214,8 @@ app.add_middleware(
 app.state.db_host = "localhost"
 app.state.db_port = 5432
 app.state.db_name = "kvstore"
-app.state.db_user = "postgres"
-app.state.db_password = "postgres"
+app.state.db_user = "siren"
+app.state.db_password = "pass"
 app.state.api_keys = []  # Will generate default if empty
 
 # Initialize auth
@@ -486,8 +486,8 @@ def create_app(
         db_host: str = "localhost",
         db_port: int = 5432,
         db_name: str = "kvstore",
-        db_user: str = "postgres",
-        db_password: str = "postgres",
+        db_user: str = "siren",
+        db_password: str = "pass",
         api_keys: Optional[List[str]] = None
 ) -> FastAPI:
     """Create and configure the FastAPI application"""
@@ -514,8 +514,8 @@ if __name__ == "__main__":
     parser.add_argument("--db-host", default="localhost", help="Database host")
     parser.add_argument("--db-port", type=int, default=5432, help="Database port")
     parser.add_argument("--db-name", default="kvstore", help="Database name")
-    parser.add_argument("--db-user", default="postgres", help="Database user")
-    parser.add_argument("--db-password", default="postgres", help="Database password")
+    parser.add_argument("--db-user", default="siren", help="Database user")
+    parser.add_argument("--db-password", default="pass", help="Database password")
     parser.add_argument("--api-key", action="append", help="API keys (can specify multiple)")
     parser.add_argument("--reload", action="store_true", help="Enable auto-reload")
 
