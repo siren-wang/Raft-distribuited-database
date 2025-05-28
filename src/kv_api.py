@@ -3,7 +3,6 @@ Distributed Key-Value Store - RESTful API Server
 FastAPI-based REST API with authentication, metrics, and comprehensive error handling
 """
 
-import asyncio
 import time
 import secrets
 from datetime import datetime
@@ -15,7 +14,6 @@ from functools import wraps
 from fastapi import FastAPI, HTTPException, Depends, Header, Request, status
 from fastapi.middleware.cors import CORSMiddleware
 from fastapi.responses import JSONResponse
-from fastapi.security import HTTPBearer, HTTPAuthorizationCredentials
 from pydantic import BaseModel, Field, validator
 import uvicorn
 from prometheus_client import Counter, Histogram, Gauge, generate_latest
@@ -23,7 +21,7 @@ from prometheus_client.core import CollectorRegistry
 from starlette.responses import PlainTextResponse
 
 # Import our KeyValueStore (from previous module)
-from kvstore.core import KeyValueStore, DatabaseConfig, KeyNotFoundError, VersionConflictError, DatabaseError
+from src.kv_store import KeyValueStore, DatabaseConfig, KeyNotFoundError, VersionConflictError, DatabaseError
 
 # Configure logging
 logging.basicConfig(

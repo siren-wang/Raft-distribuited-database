@@ -1,0 +1,90 @@
+
+version: '3.8'
+
+services:
+  postgres:
+    image: postgres:15-alpine
+    container_name: kvstore-postgres
+    environment:
+      POSTGRES_USER: siren
+      POSTGRES_PASSWORD:
+      POSTGRES_DB: kvstore
+    ports:
+      - "5432:5432"
+    volumes:
+      - postgres_data:/var/lib/postgresql/data
+    healthcheck:
+      test: ["CMD-SHELL", "pg_isready -U postgres"]
+      interval: 10s
+      timeout: 5s
+      retries: 5
+
+  kvstore-api:
+    build:
+      context: .
+      dockerfile: Dockerfile
+    container_name: kvstore-api
+    ports:
+      - "8000:8000"
+    environment:
+      DB_HOST: postgres
+      DB_PORT: 5432
+      DB_NAME: kvstore
+      DB_USER: siren
+      DB_PASSWORD:
+      # Generate a secure API key for production
+      API_KEY: "development-api-key-change-in-production"
+    depends_on:
+      postgres:
+        condition: service_healthy
+    command: >
+      python -m kv_api
+      --host 0.0.0.0
+      --port 8000
+      --db-host postgres
+      --db-port 5432
+      --db-name kvstore
+      --db-user postgres
+      --db-password postgres
+      --api-key development-api-key-change-in-production
+
+  # Optional: Prometheus for metrics collection
+  prometheus:
+    image: prom/prometheus:latest
+    container_name: kvstore-prometheus
+    ports:
+      - "9090:9090"
+    volumes:
+      - ./prometheus.yml:/etc/prometheus/prometheus.yml
+      - prometheus_data:/prometheus
+    command:
+      - '--config.file=/etc/prometheus/prometheus.yml'
+      - '--storage.tsdb.path=/prometheus'
+
+volumes:
+  postgres_data:
+  prometheus_data:
+
+# Dockerfile content (save as Dockerfile):
+# FROM python:3.11-slim
+#
+# WORKDIR /app
+#
+# # Install system dependencies
+# RUN apt-get update && apt-get install -y \
+#     gcc \
+#     && rm -rf /var/lib/apt/lists/*
+#
+# # Copy requirements
+# COPY requirements.txt .
+# RUN pip install --no-cache-dir -r requirements.txt
+#
+# # Copy application code
+# COPY kv_store.py .
+# COPY kv_api.py .
+#
+# # Expose port
+# EXPOSE 8000
+#
+# # Run the application
+# CMD ["python", "-m", "kv_api"]

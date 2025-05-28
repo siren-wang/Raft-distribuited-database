@@ -1,0 +1,18 @@
+# Core dependencies
+fastapi==0.104.1
+uvicorn[standard]==0.24.0
+pydantic==2.5.0
+asyncpg==0.29.0
+backoff==2.2.1
+
+# Metrics and monitoring
+prometheus-client==0.19.0
+
+# Development tools
+pytest==7.4.3
+pytest-asyncio==0.21.1
+httpx==0.25.2
+
+# Optional: for better performance
+orjson==3.9.10
+ujson==5.8.0
