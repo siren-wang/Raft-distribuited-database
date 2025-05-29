@@ -6,7 +6,7 @@ Core Raft consensus algorithm with leader election and log replication
 import asyncio
 import random
 import logging
-from typing import Dict, Any, List, Optional, Callable
+from typing import Dict, Any, List, Optional, Callable, Tuple
 from datetime import datetime, timedelta
 from enum import Enum
 
