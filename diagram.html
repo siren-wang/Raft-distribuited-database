@@ -1,0 +1,94 @@
+<svg width="800" height="600" xmlns="http://www.w3.org/2000/svg">
+    <!-- Title -->
+    <text x="400" y="30" text-anchor="middle" font-size="24" font-weight="bold">Raft State Machine</text>
+    
+    <!-- States -->
+    <!-- Follower -->
+    <g id="follower">
+      <rect x="50" y="200" width="150" height="80" rx="10" fill="#E3F2FD" stroke="#1976D2" stroke-width="2"/>
+      <text x="125" y="235" text-anchor="middle" font-size="18" font-weight="bold">Follower</text>
+      <text x="125" y="255" text-anchor="middle" font-size="14">• Responds to RPCs</text>
+      <text x="125" y="270" text-anchor="middle" font-size="14">• No client requests</text>
+    </g>
+    
+    <!-- Candidate -->
+    <g id="candidate">
+      <rect x="325" y="80" width="150" height="80" rx="10" fill="#FFF3E0" stroke="#F57C00" stroke-width="2"/>
+      <text x="400" y="115" text-anchor="middle" font-size="18" font-weight="bold">Candidate</text>
+      <text x="400" y="135" text-anchor="middle" font-size="14">• Requests votes</text>
+      <text x="400" y="150" text-anchor="middle" font-size="14">• Becomes leader</text>
+    </g>
+    
+    <!-- Leader -->
+    <g id="leader">
+      <rect x="600" y="200" width="150" height="80" rx="10" fill="#E8F5E9" stroke="#388E3C" stroke-width="2"/>
+      <text x="675" y="235" text-anchor="middle" font-size="18" font-weight="bold">Leader</text>
+      <text x="675" y="255" text-anchor="middle" font-size="14">• Handles requests</text>
+      <text x="675" y="270" text-anchor="middle" font-size="14">• Sends heartbeats</text>
+    </g>
+    
+    <!-- Transitions -->
+    <!-- Follower to Candidate -->
+    <g id="f-to-c">
+      <path d="M 200 220 Q 300 150 325 120" fill="none" stroke="#666" stroke-width="2" marker-end="url(#arrowhead)"/>
+      <text x="260" y="160" text-anchor="middle" font-size="12" fill="#666">Election timeout</text>
+    </g>
+    
+    <!-- Candidate to Leader -->
+    <g id="c-to-l">
+      <path d="M 475 120 Q 550 150 600 220" fill="none" stroke="#666" stroke-width="2" marker-end="url(#arrowhead)"/>
+      <text x="540" y="160" text-anchor="middle" font-size="12" fill="#666">Majority votes</text>
+    </g>
+    
+    <!-- Candidate to Follower -->
+    <g id="c-to-f">
+      <path d="M 325 140 Q 250 170 200 220" fill="none" stroke="#666" stroke-width="2" marker-end="url(#arrowhead)"/>
+      <text x="260" y="190" text-anchor="middle" font-size="12" fill="#666">Higher term</text>
+    </g>
+    
+    <!-- Leader to Follower -->
+    <g id="l-to-f">
+      <path d="M 600 260 Q 400 360 200 260" fill="none" stroke="#666" stroke-width="2" marker-end="url(#arrowhead)"/>
+      <text x="400" y="330" text-anchor="middle" font-size="12" fill="#666">Higher term discovered</text>
+    </g>
+    
+    <!-- Self loops -->
+    <!-- Follower self -->
+    <g id="f-self">
+      <path d="M 125 280 Q 125 320 125 280" fill="none" stroke="#666" stroke-width="1" marker-end="url(#arrowhead-small)"/>
+      <text x="125" y="340" text-anchor="middle" font-size="11" fill="#666">AppendEntries</text>
+    </g>
+    
+    <!-- Candidate self -->
+    <g id="c-self">
+      <path d="M 400 80 Q 400 40 400 80" fill="none" stroke="#666" stroke-width="1" marker-end="url(#arrowhead-small)"/>
+      <text x="400" y="50" text-anchor="middle" font-size="11" fill="#666">Split vote</text>
+    </g>
+    
+    <!-- Leader self -->
+    <g id="l-self">
+      <path d="M 675 280 Q 675 320 675 280" fill="none" stroke="#666" stroke-width="1" marker-end="url(#arrowhead-small)"/>
+      <text x="675" y="340" text-anchor="middle" font-size="11" fill="#666">Client requests</text>
+    </g>
+    
+    <!-- Arrow markers -->
+    <defs>
+      <marker id="arrowhead" markerWidth="10" markerHeight="7" refX="9" refY="3.5" orient="auto">
+        <polygon points="0 0, 10 3.5, 0 7" fill="#666"/>
+      </marker>
+      <marker id="arrowhead-small" markerWidth="8" markerHeight="6" refX="7" refY="3" orient="auto">
+        <polygon points="0 0, 8 3, 0 6" fill="#666"/>
+      </marker>
+    </defs>
+    
+    <!-- Key events -->
+    <g id="key">
+      <rect x="50" y="420" width="700" height="120" rx="5" fill="#F5F5F5" stroke="#999" stroke-width="1"/>
+      <text x="400" y="445" text-anchor="middle" font-size="16" font-weight="bold">Key Events</text>
+      
+      <text x="70" y="470" font-size="14">• Election Timeout: No heartbeat received within timeout period</text>
+      <text x="70" y="490" font-size="14">• Majority Votes: Received votes from majority of cluster</text>
+      <text x="70" y="510" font-size="14">• Higher Term: Discovered a node with higher term number</text>
+      <text x="70" y="530" font-size="14">• Heartbeat: Empty AppendEntries RPC from leader</text>
+    </g>
+  </svg>
