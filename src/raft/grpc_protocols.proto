@@ -1,0 +1,321 @@
+syntax = "proto3";
+
+package raft;
+
+import "google/protobuf/timestamp.proto";
+import "google/protobuf/any.proto";
+
+// Raft RPC service definition
+service RaftService {
+    // Core Raft RPCs
+    rpc RequestVote(RequestVoteRequest) returns (RequestVoteResponse);
+    rpc AppendEntries(AppendEntriesRequest) returns (AppendEntriesResponse);
+    rpc InstallSnapshot(InstallSnapshotRequest) returns (InstallSnapshotResponse);
+    
+    // Extended RPCs for cluster management
+    rpc AddNode(AddNodeRequest) returns (AddNodeResponse);
+    rpc RemoveNode(RemoveNodeRequest) returns (RemoveNodeResponse);
+    rpc GetClusterInfo(GetClusterInfoRequest) returns (GetClusterInfoResponse);
+    
+    // Health and monitoring
+    rpc HealthCheck(HealthCheckRequest) returns (HealthCheckResponse);
+    rpc GetMetrics(GetMetricsRequest) returns (GetMetricsResponse);
+    
+    // Client request forwarding
+    rpc ForwardRequest(ForwardRequestMsg) returns (ForwardResponseMsg);
+    
+    // Streaming RPCs for efficiency
+    rpc StreamAppendEntries(stream AppendEntriesRequest) returns (stream AppendEntriesResponse);
+}
+
+// Core Raft messages
+message RequestVoteRequest {
+    uint64 term = 1;
+    string candidate_id = 2;
+    uint64 last_log_index = 3;
+    uint64 last_log_term = 4;
+    
+    // Pre-vote extension
+    bool pre_vote = 5;
+}
+
+message RequestVoteResponse {
+    uint64 term = 1;
+    bool vote_granted = 2;
+    
+    // Additional debugging info
+    string reason = 3;
+}
+
+message LogEntry {
+    uint64 term = 1;
+    uint64 index = 2;
+    google.protobuf.Any command = 3;
+    google.protobuf.Timestamp timestamp = 4;
+    
+    // For batching
+    string client_id = 5;
+    string request_id = 6;
+}
+
+message AppendEntriesRequest {
+    uint64 term = 1;
+    string leader_id = 2;
+    uint64 prev_log_index = 3;
+    uint64 prev_log_term = 4;
+    repeated LogEntry entries = 5;
+    uint64 leader_commit = 6;
+    
+    // Performance optimizations
+    bool is_heartbeat = 7;
+    uint64 read_index = 8;  // For read-only queries
+}
+
+message AppendEntriesResponse {
+    uint64 term = 1;
+    bool success = 2;
+    uint64 match_index = 3;
+    
+    // Optimization hints
+    uint64 conflict_index = 4;
+    uint64 conflict_term = 5;
+    uint64 last_log_index = 6;
+}
+
+// Snapshot messages
+message InstallSnapshotRequest {
+    uint64 term = 1;
+    string leader_id = 2;
+    uint64 last_included_index = 3;
+    uint64 last_included_term = 4;
+    uint64 offset = 5;
+    bytes data = 6;
+    bool done = 7;
+    
+    // Snapshot metadata
+    SnapshotMetadata metadata = 8;
+}
+
+message InstallSnapshotResponse {
+    uint64 term = 1;
+    uint64 bytes_stored = 2;
+}
+
+message SnapshotMetadata {
+    uint64 index = 1;
+    uint64 term = 2;
+    repeated string cluster_members = 3;
+    google.protobuf.Timestamp created_at = 4;
+    uint64 size = 5;
+    string checksum = 6;
+}
+
+// Cluster management messages
+message NodeInfo {
+    string node_id = 1;
+    string address = 2;
+    NodeState state = 3;
+    google.protobuf.Timestamp last_contact = 4;
+    bool is_voter = 5;
+    bool is_learner = 6;
+    
+    // Performance metrics
+    double cpu_usage = 7;
+    double memory_usage = 8;
+    uint64 disk_usage = 9;
+}
+
+enum NodeState {
+    NODE_STATE_UNKNOWN = 0;
+    NODE_STATE_FOLLOWER = 1;
+    NODE_STATE_CANDIDATE = 2;
+    NODE_STATE_LEADER = 3;
+    NODE_STATE_LEARNER = 4;
+}
+
+message AddNodeRequest {
+    string node_id = 1;
+    string address = 2;
+    bool as_learner = 3;
+}
+
+message AddNodeResponse {
+    bool success = 1;
+    string error = 2;
+    ClusterConfig new_config = 3;
+}
+
+message RemoveNodeRequest {
+    string node_id = 1;
+}
+
+message RemoveNodeResponse {
+    bool success = 1;
+    string error = 2;
+    ClusterConfig new_config = 3;
+}
+
+message GetClusterInfoRequest {
+    bool include_metrics = 1;
+}
+
+message GetClusterInfoResponse {
+    string leader_id = 1;
+    repeated NodeInfo nodes = 2;
+    ClusterConfig config = 3;
+    ClusterStats stats = 4;
+}
+
+message ClusterConfig {
+    uint64 version = 1;
+    repeated string members = 2;
+    repeated string learners = 3;
+    map<string, string> node_addresses = 4;
+}
+
+message ClusterStats {
+    uint64 total_commits = 1;
+    uint64 total_applies = 2;
+    double commits_per_second = 3;
+    double average_commit_latency_ms = 4;
+    uint64 log_size = 5;
+    uint64 snapshot_index = 6;
+}
+
+// Health check messages
+message HealthCheckRequest {
+    string node_id = 1;
+    bool detailed = 2;
+}
+
+message HealthCheckResponse {
+    bool healthy = 1;
+    string status = 2;
+    uint64 current_term = 3;
+    string current_leader = 4;
+    
+    HealthDetails details = 5;
+}
+
+message HealthDetails {
+    uint64 uptime_seconds = 1;
+    uint64 last_heartbeat_ms = 2;
+    uint64 entries_behind_leader = 3;
+    double disk_usage_percent = 4;
+    double memory_usage_percent = 5;
+    repeated string warnings = 6;
+}
+
+// Metrics messages
+message GetMetricsRequest {
+    repeated string metric_names = 1;
+    uint64 since_timestamp = 2;
+}
+
+message GetMetricsResponse {
+    map<string, MetricValue> metrics = 1;
+}
+
+message MetricValue {
+    oneof value {
+        double gauge = 1;
+        uint64 counter = 2;
+        Histogram histogram = 3;
+    }
+    google.protobuf.Timestamp timestamp = 4;
+    map<string, string> labels = 5;
+}
+
+message Histogram {
+    uint64 count = 1;
+    double sum = 2;
+    double min = 3;
+    double max = 4;
+    double mean = 5;
+    double stddev = 6;
+    map<string, double> percentiles = 7;  // e.g., "p50", "p95", "p99"
+}
+
+// Client request forwarding
+message ForwardRequestMsg {
+    string client_id = 1;
+    string request_id = 2;
+    
+    oneof request {
+        GetRequest get = 3;
+        PutRequest put = 4;
+        DeleteRequest delete = 5;
+        CompareAndSwapRequest cas = 6;
+    }
+}
+
+message ForwardResponseMsg {
+    string request_id = 1;
+    bool success = 2;
+    string error = 3;
+    
+    oneof response {
+        GetResponse get = 4;
+        PutResponse put = 5;
+        DeleteResponse delete = 6;
+        CompareAndSwapResponse cas = 7;
+    }
+}
+
+// KV operations
+message GetRequest {
+    string key = 1;
+    bool linearizable = 2;
+}
+
+message GetResponse {
+    string key = 1;
+    bytes value = 2;
+    uint64 version = 3;
+    bool exists = 4;
+}
+
+message PutRequest {
+    string key = 1;
+    bytes value = 2;
+    uint64 ttl_seconds = 3;
+}
+
+message PutResponse {
+    string key = 1;
+    uint64 version = 2;
+    bool created = 3;
+}
+
+message DeleteRequest {
+    string key = 1;
+}
+
+message DeleteResponse {
+    string key = 1;
+    bool deleted = 2;
+    uint64 previous_version = 3;
+}
+
+message CompareAndSwapRequest {
+    string key = 1;
+    bytes expected_value = 2;
+    bytes new_value = 3;
+    uint64 expected_version = 4;
+}
+
+message CompareAndSwapResponse {
+    bool success = 1;
+    uint64 current_version = 2;
+}
+
+// Batch operations for performance
+message BatchRequest {
+    repeated ForwardRequestMsg requests = 1;
+    bool atomic = 2;  // All or nothing
+}
+
+message BatchResponse {
+    repeated ForwardResponseMsg responses = 1;
+    bool all_succeeded = 2;
+}
