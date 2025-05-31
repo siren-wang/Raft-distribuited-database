@@ -53,7 +53,7 @@ services:
     networks:
       - raft-network
 
-  # Raft nodes
+# Raft nodes
   raft-node1:
     build:
       context: .
@@ -76,6 +76,12 @@ services:
     depends_on:
       postgres-node1:
         condition: service_healthy
+    healthcheck:
+      test: ["CMD-SHELL", "curl -f http://localhost:8001/raft/status || exit 1"]
+      interval: 30s
+      timeout: 10s
+      start_period: 60s
+      retries: 3
     networks:
       - raft-network
 
@@ -101,6 +107,12 @@ services:
     depends_on:
       postgres-node2:
         condition: service_healthy
+    healthcheck:
+      test: ["CMD-SHELL", "curl -f http://localhost:8002/raft/status || exit 1"]
+      interval: 30s
+      timeout: 10s
+      start_period: 60s
+      retries: 3
     networks:
       - raft-network
 
@@ -126,6 +138,12 @@ services:
     depends_on:
       postgres-node3:
         condition: service_healthy
+    healthcheck:
+      test: ["CMD-SHELL", "curl -f http://localhost:8003/raft/status || exit 1"]
+      interval: 30s
+      timeout: 10s
+      start_period: 60s
+      retries: 3
     networks:
       - raft-network
 

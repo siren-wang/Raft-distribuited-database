@@ -72,6 +72,8 @@ class RaftClusterNode:
         
         # Start Raft components
         await self.raft_store.start()
+
+        await asyncio.sleep(1.0)
         
         # Create FastAPI app
         self.app = create_raft_api(self.raft_store)

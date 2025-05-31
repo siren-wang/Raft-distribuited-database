@@ -64,12 +64,7 @@ class RaftRPCClient:
                 # FIXED: Create client with better timeout configuration
                 self.clients[node_id] = httpx.AsyncClient(
                     base_url=f"http://{address}",
-                    timeout=httpx.Timeout(
-                        total=self.timeout,
-                        connect=5.0,  # Connection timeout
-                        read=5.0,     # Read timeout
-                        write=5.0     # Write timeout
-                    ),
+                    timeout=httpx.Timeout(self.timeout),
                     limits=httpx.Limits(
                         max_keepalive_connections=5,
                         max_connections=10,
