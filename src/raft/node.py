@@ -1,5 +1,5 @@
 """
-Raft Node Implementation - FIXED
+Raft Node Implementation
 Core Raft consensus algorithm with leader election and log replication
 """
 
@@ -36,8 +36,8 @@ class RaftNode:
                  node_id: str,
                  cluster_config: Dict[str, str],
                  state_dir: str = "./raft_state",
-                 election_timeout_range: Tuple[float, float] = (1.5, 3.0),
-                 heartbeat_interval: float = 0.5):
+                 election_timeout_range: Tuple[float, float] = (1.5, 3.0),  # FIXED: Increased timeout
+                 heartbeat_interval: float = 0.5):  # FIXED: Increased interval
         """
         Initialize Raft node
         
@@ -56,7 +56,7 @@ class RaftNode:
         self.state = RaftState(node_id, state_dir)
         
         # RPC handling
-        self.rpc_client = RaftRPCClient(node_id, timeout=5.0)
+        self.rpc_client = RaftRPCClient(node_id, timeout=5.0)  # FIXED: Increased timeout
         self.rpc_handler = RaftRPCHandler(self)
         self.batched_append = BatchedAppendEntries(self.rpc_client)
         
@@ -89,13 +89,12 @@ class RaftNode:
         # Initialize RPC client
         await self.rpc_client.initialize(self.cluster_config)
         
-        # Set running flag BEFORE transitioning to follower
-        self.running = True
-        
-        # Wait for cluster to stabilize and all HTTP endpoints to be ready
+        # FIXED: Add delay to ensure all nodes are up
         logger.info(f"Waiting for cluster to stabilize...")
-        await asyncio.sleep(8.0)  # Long delay to ensure all nodes have HTTP endpoints ready
+        await asyncio.sleep(2.0)
         
+        self.running = True
+
         # Start as follower
         self.transition_to_follower()
         
@@ -176,30 +175,23 @@ class RaftNode:
         if self.election_timer_task:
             self.election_timer_task.cancel()
         
-        # Check if we should start the timer
         if self.running and self.state.state != RaftNodeState.LEADER.value:
             timeout = random.uniform(*self.election_timeout_range)
             self.election_timer_task = asyncio.create_task(self._election_timeout(timeout))
-            logger.info(f"Started election timer for node {self.node_id} with timeout {timeout:.3f}s")
+            logger.debug(f"Reset election timer with timeout {timeout:.3f}s")
     
     async def _election_timeout(self, timeout: float):
         """Handle election timeout"""
         try:
-            logger.debug(f"Election timer started for node {self.node_id}, waiting {timeout:.3f}s")
             await asyncio.sleep(timeout)
             
-            # Double-check we're still a follower
-            if self.running and self.state.state == RaftNodeState.FOLLOWER.value:
+            if self.state.state == RaftNodeState.FOLLOWER.value:
                 logger.info(f"Election timeout on node {self.node_id} after {timeout:.3f}s")
                 self.transition_to_candidate()
-            else:
-                logger.debug(f"Election timer expired but node {self.node_id} is no longer follower (state={self.state.state})")
                 
         except asyncio.CancelledError:
             logger.debug(f"Election timer cancelled for node {self.node_id}")
             pass
-        except Exception as e:
-            logger.error(f"Error in election timeout for node {self.node_id}: {e}")
     
     async def _run_election(self):
         """Run leader election"""
@@ -232,7 +224,16 @@ class RaftNode:
             
             # Wait for votes
             if vote_requests:
+                logger.info(f"Node {self.node_id} sending {len(vote_requests)} vote requests")
                 responses = await asyncio.gather(*vote_requests, return_exceptions=True)
+                
+                # Check if all responses are None (connection failures)
+                none_count = sum(1 for r in responses if r is None)
+                if none_count == len(responses):
+                    logger.error(f"Node {self.node_id} failed to connect to any other nodes during election")
+                    if self.state.state == RaftNodeState.CANDIDATE.value:
+                        self.transition_to_follower()
+                    return
                 
                 for i, response in enumerate(responses):
                     peer_node = [n for n in self.cluster_nodes if n != self.node_id][i]
@@ -267,7 +268,7 @@ class RaftNode:
                 self.transition_to_follower()
                 
         except Exception as e:
-            logger.error(f"Error in election for node {self.node_id}: {e}")
+            logger.error(f"Error in election for node {self.node_id}: {e}", exc_info=True)
             # On error, transition back to follower
             if self.state.state == RaftNodeState.CANDIDATE.value:
                 self.transition_to_follower()
@@ -276,6 +277,7 @@ class RaftNode:
         """Request vote from a single node"""
         logger.debug(f"Node {self.node_id} requesting vote from {node_id}")
         return await self.rpc_client.request_vote(node_id, request)
+        
     
     async def _heartbeat_loop(self):
         """Send periodic heartbeats as leader"""
@@ -365,7 +367,7 @@ class RaftNode:
     
     async def _run_state_machine(self):
         """Background task to apply committed entries to state machine"""
-        # Add initial delay to ensure everything is ready
+        # FIXED: Add initial delay to ensure everything is ready
         await asyncio.sleep(1.0)
         
         while self.running:

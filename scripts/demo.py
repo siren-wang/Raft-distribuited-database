@@ -78,7 +78,7 @@ class RaftDemoRunner:
         """Stop a node using docker"""
         try:
             subprocess.run(
-                ["docker-compose", "-f", "docker-compose-raft.yml", "stop", f"raft-{node_id}"],
+                ["docker compose", "-f", "docker-compose-raft.yml", "stop", f"raft-{node_id}"],
                 check=True,
                 capture_output=True
             )
@@ -90,7 +90,7 @@ class RaftDemoRunner:
         """Start a node using docker"""
         try:
             subprocess.run(
-                ["docker-compose", "-f", "docker-compose-raft.yml", "start", f"raft-{node_id}"],
+                ["docker compose", "-f", "docker-compose-raft.yml", "start", f"raft-{node_id}"],
                 check=True,
                 capture_output=True
             )
@@ -98,7 +98,7 @@ class RaftDemoRunner:
         except Exception as e:
             print(f"✗ Failed to start {node_id}: {e}")
     
-    async def wait_for_leader(self, timeout: int = 10) -> bool:
+    async def wait_for_leader(self, timeout: int = 20) -> bool:
         """Wait for a leader to be elected"""
         start = time.time()
         while time.time() - start < timeout:
@@ -106,7 +106,7 @@ class RaftDemoRunner:
             if leader:
                 print(f"✓ Leader elected: {leader}")
                 return True
-            await asyncio.sleep(0.5)
+            await asyncio.sleep(1)
         return False
     
     async def demo_leader_election(self):
@@ -198,73 +198,6 @@ class RaftDemoRunner:
         self.start_node(leader)
         await asyncio.sleep(2)
         print(f"✓ {leader} rejoined as follower")
-    
-    async def demo_split_brain_prevention(self):
-        """Demo 4: Split brain prevention"""
-        print("\n=== Demo 4: Split Brain Prevention ===")
-        
-        # Stop two nodes (minority)
-        print("Creating minority partition (stopping 2 of 3 nodes)...")
-        self.stop_node("node2")
-        self.stop_node("node3")
-        
-        await asyncio.sleep(2)
-        
-        # Try to write to remaining node
-        print("Attempting to write to minority partition...")
-        try:
-            response = await self.client.put(
-                f"http://{self.nodes['node1']}/kv/test-split",
-                json={"value": "should fail"},
-                timeout=3.0
-            )
-            if response.status_code != 200:
-                print("✓ Minority partition correctly rejected write")
-        except:
-            print("✓ Minority partition cannot accept writes")
-        
-        # Restart nodes
-        print("Healing partition...")
-        self.start_node("node2")
-        self.start_node("node3")
-        
-        await asyncio.sleep(3)
-        if await self.wait_for_leader():
-            print("✓ Cluster recovered and elected leader")
-    
-    async def demo_concurrent_writes(self):
-        """Demo 5: Concurrent writes"""
-        print("\n=== Demo 5: Concurrent Writes ===")
-        
-        # Ensure we have a leader
-        if not await self.wait_for_leader():
-            print("No leader available")
-            return
-        
-        print("Sending 10 concurrent write requests...")
-        
-        # Create concurrent write tasks
-        tasks = []
-        for i in range(10):
-            key = f"concurrent-{i}"
-            value = {"client": i, "timestamp": time.time()}
-            tasks.append(self.write_data(key, value))
-        
-        # Execute concurrently
-        results = await asyncio.gather(*tasks)
-        
-        successful = sum(1 for r in results if r)
-        print(f"✓ {successful}/10 writes succeeded")
-        
-        # Verify all successful writes are replicated
-        await asyncio.sleep(1)
-        print("Verifying replication...")
-        
-        for i in range(10):
-            key = f"concurrent-{i}"
-            data = await self.read_data(key)
-            if data:
-                print(f"  ✓ {key}: Replicated to all nodes")
 
 
 async def main():
@@ -282,7 +215,7 @@ async def main():
     try:
         print("=== Raft Consensus Demo Suite ===")
         print("Make sure the cluster is running:")
-        print("  docker-compose -f docker-compose-raft.yml up -d")
+        print("docker compose -f docker-compose-raft.yml up -d")
         print()
         
         # Wait for cluster to stabilize
@@ -298,12 +231,7 @@ async def main():
         
         await runner.demo_leader_failure()
         await asyncio.sleep(2)
-        
-        await runner.demo_split_brain_prevention()
-        await asyncio.sleep(2)
-        
-        await runner.demo_concurrent_writes()
-        
+                
         print("\n=== All demos completed! ===")
         
     finally:

@@ -124,14 +124,14 @@ async def demo_basic_operations():
     try:
         # Wait for cluster to elect a leader
         print("1. Waiting for leader election...")
-        for i in range(10):
+        for i in range(20):
             leader = await client.find_leader()
             if leader:
                 print(f"   Leader elected: {leader}")
                 break
             await asyncio.sleep(1)
         else:
-            print("   No leader elected after 10 seconds")
+            print("   No leader elected after 20 seconds")
             return
         
         # Show cluster status

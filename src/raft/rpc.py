@@ -108,6 +108,15 @@ class RaftRPCClient:
         except Exception as e:
             logger.error(f"RequestVote to {target_node} failed with unexpected error: {e}")
             return None
+        except httpx.ConnectError as e:
+            logger.warning(f"RequestVote to {target_node} failed - connection error: {e}")
+            return None
+        except httpx.TimeoutException as e:
+            logger.warning(f"RequestVote to {target_node} failed - timeout: {e}")
+            return None
+        except Exception as e:
+            logger.error(f"RequestVote to {target_node} failed with unexpected error: {e}")
+            return None
     
     async def append_entries(self, target_node: str, request: AppendEntriesRequest) -> Optional[AppendEntriesResponse]:
         """Send AppendEntries RPC to target node"""
