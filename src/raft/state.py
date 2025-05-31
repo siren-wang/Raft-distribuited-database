@@ -76,27 +76,52 @@ class RaftState:
     async def save_persistent_state(self):
         """Save persistent state to disk"""
         async with self._state_lock:
-            state_data = {
-                "current_term": self.current_term,
-                "voted_for": self.voted_for,
-                "log": [entry.to_dict() for entry in self.log]
-            }
+            await self._save_persistent_state()
+    
+    async def _save_persistent_state(self):
+        """Save persistent state to disk (assumes lock is already held)"""
+        logger.debug(f"Node {self.node_id} _save_persistent_state starting")
+        state_data = {
+            "current_term": self.current_term,
+            "voted_for": self.voted_for,
+            "log": [entry.to_dict() for entry in self.log]
+        }
+        
+        state_file = self.state_dir / "state.json"
+        temp_file = self.state_dir / "state.json.tmp"
+        
+        try:
+            logger.debug(f"Node {self.node_id} about to write state data")
             
-            state_file = self.state_dir / "state.json"
-            temp_file = self.state_dir / "state.json.tmp"
+            # Use synchronous I/O in thread pool to avoid async deadlocks
+            loop = asyncio.get_event_loop()
             
-            try:
+            def _sync_write():
                 # Write to temporary file first
-                async with aiofiles.open(temp_file, 'w') as f:
-                    await f.write(json.dumps(state_data, indent=2))
+                with open(temp_file, 'w') as f:
+                    json.dump(state_data, f, indent=2)
+                    f.flush()
                 
                 # Atomic rename
-                os.replace(temp_file, state_file)
-                
-                logger.debug(f"Saved persistent state: term={self.current_term}, voted_for={self.voted_for}")
-            except Exception as e:
-                logger.error(f"Failed to save persistent state: {e}")
-                raise
+                import shutil
+                shutil.move(str(temp_file), str(state_file))
+            
+            await asyncio.wait_for(
+                loop.run_in_executor(None, _sync_write),
+                timeout=3.0
+            )
+            
+            logger.debug(f"Saved persistent state: term={self.current_term}, voted_for={self.voted_for}")
+        except Exception as e:
+            logger.error(f"Node {self.node_id} failed to save persistent state: {e}", exc_info=True)
+            # Clean up temp file if it exists
+            try:
+                if temp_file.exists():
+                    temp_file.unlink()
+                    logger.debug(f"Node {self.node_id} cleaned up temp file")
+            except Exception as cleanup_e:
+                logger.error(f"Node {self.node_id} failed to cleanup temp file: {cleanup_e}")
+            raise
     
     async def load_persistent_state(self):
         """Load persistent state from disk"""
@@ -126,21 +151,70 @@ class RaftState:
             logger.error(f"Failed to load persistent state: {e}")
             raise
     
+    async def _update_term_no_lock(self, new_term: int):
+        """Update current term and reset voted_for (assumes lock is already held)"""
+        logger.debug(f"Node {self.node_id} _update_term_no_lock called: {self.current_term} -> {new_term}")
+        if new_term > self.current_term:
+            logger.debug(f"Node {self.node_id} updating term from {self.current_term} to {new_term}")
+            self.current_term = new_term
+            self.voted_for = None
+            logger.debug(f"Node {self.node_id} about to save persistent state")
+            await self._save_persistent_state()
+            logger.info(f"Updated term to {new_term}")
+        else:
+            logger.debug(f"Node {self.node_id} not updating term: {new_term} <= {self.current_term}")
+
+    async def _record_vote_no_lock(self, candidate_id: str):
+        """Record vote for a candidate (assumes lock is already held)"""
+        logger.debug(f"Node {self.node_id} _record_vote_no_lock called for {candidate_id}")
+        self.voted_for = candidate_id
+        logger.debug(f"Node {self.node_id} about to save persistent state in record_vote")
+        await self._save_persistent_state()
+        logger.info(f"Voted for {candidate_id} in term {self.current_term}")
+
     async def update_term(self, new_term: int):
         """Update current term and reset voted_for"""
-        async with self._state_lock:
-            if new_term > self.current_term:
-                self.current_term = new_term
-                self.voted_for = None
-                await self.save_persistent_state()
-                logger.info(f"Updated term to {new_term}")
-    
+        logger.debug(f"Node {self.node_id} update_term called: {self.current_term} -> {new_term}")
+        
+        # Simple timeout wrapper with shorter timeout
+        async def _do_update():
+            logger.debug(f"Node {self.node_id} attempting to acquire state lock in update_term")
+            async with self._state_lock:
+                logger.debug(f"Node {self.node_id} acquired state lock in update_term")
+                await self._update_term_no_lock(new_term)
+                logger.debug(f"Node {self.node_id} about to release state lock in update_term")
+        
+        try:
+            await asyncio.wait_for(_do_update(), timeout=10.0)  # Reduced timeout
+            logger.debug(f"Node {self.node_id} successfully completed update_term")
+        except asyncio.TimeoutError:
+            logger.error(f"Node {self.node_id} update_term timed out after 10 seconds")
+            raise
+        except Exception as e:
+            logger.error(f"Node {self.node_id} update_term failed: {e}", exc_info=True)
+            raise
+
     async def record_vote(self, candidate_id: str):
         """Record vote for a candidate"""
-        async with self._state_lock:
-            self.voted_for = candidate_id
-            await self.save_persistent_state()
-            logger.info(f"Voted for {candidate_id} in term {self.current_term}")
+        logger.debug(f"Node {self.node_id} record_vote called for {candidate_id}")
+        
+        # Simple timeout wrapper with shorter timeout
+        async def _do_vote():
+            logger.debug(f"Node {self.node_id} attempting to acquire state lock in record_vote")
+            async with self._state_lock:
+                logger.debug(f"Node {self.node_id} acquired state lock in record_vote")
+                await self._record_vote_no_lock(candidate_id)
+                logger.debug(f"Node {self.node_id} about to release state lock in record_vote")
+        
+        try:
+            await asyncio.wait_for(_do_vote(), timeout=10.0)  # Reduced timeout
+            logger.debug(f"Node {self.node_id} successfully completed record_vote")
+        except asyncio.TimeoutError:
+            logger.error(f"Node {self.node_id} record_vote timed out after 10 seconds")
+            raise
+        except Exception as e:
+            logger.error(f"Node {self.node_id} record_vote failed: {e}", exc_info=True)
+            raise
     
     async def append_entries(self, entries: List[LogEntry], leader_commit: int = None):
         """Append new entries to the log"""
@@ -152,7 +226,7 @@ class RaftState:
                     entry.index = start_index + i
                 
                 self.log.extend(entries)
-                await self.save_persistent_state()
+                await self._save_persistent_state()
                 
                 logger.info(f"Appended {len(entries)} entries to log")
             
@@ -167,7 +241,7 @@ class RaftState:
             if start_index <= len(self.log):
                 deleted_count = len(self.log) - start_index + 1
                 self.log = self.log[:start_index - 1]
-                await self.save_persistent_state()
+                await self._save_persistent_state()
                 logger.info(f"Deleted {deleted_count} conflicting entries from index {start_index}")
     
     def get_last_log_index(self) -> int:

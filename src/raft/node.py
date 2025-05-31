@@ -36,8 +36,8 @@ class RaftNode:
                  node_id: str,
                  cluster_config: Dict[str, str],
                  state_dir: str = "./raft_state",
-                 election_timeout_range: Tuple[float, float] = (1.5, 3.0),  # FIXED: Increased timeout
-                 heartbeat_interval: float = 0.5):  # FIXED: Increased interval
+                 election_timeout_range: Tuple[float, float] = (3.0, 6.0),  # FIXED: Wider timeout range
+                 heartbeat_interval: float = 1.0):  # FIXED: Slower heartbeat for stability
         """
         Initialize Raft node
         
@@ -56,7 +56,7 @@ class RaftNode:
         self.state = RaftState(node_id, state_dir)
         
         # RPC handling
-        self.rpc_client = RaftRPCClient(node_id, timeout=5.0)  # FIXED: Increased timeout
+        self.rpc_client = RaftRPCClient(node_id, timeout=10.0)  # FIXED: Longer timeout
         self.rpc_handler = RaftRPCHandler(self)
         self.batched_append = BatchedAppendEntries(self.rpc_client)
         
@@ -76,8 +76,12 @@ class RaftNode:
         self.running = False
         self._shutdown_event = asyncio.Event()
         
+        # FIXED: Add randomized startup delay to prevent simultaneous elections
+        self._startup_delay = random.uniform(0.5, 2.0)
+        
         logger.info(f"Initialized RaftNode {node_id} with {len(cluster_config)} nodes in cluster")
         logger.info(f"Election timeout range: {election_timeout_range}, Heartbeat interval: {heartbeat_interval}")
+        logger.info(f"Startup delay: {self._startup_delay:.2f}s")
     
     async def start(self):
         """Start the Raft node"""
@@ -89,7 +93,11 @@ class RaftNode:
         # Initialize RPC client
         await self.rpc_client.initialize(self.cluster_config)
         
-        # FIXED: Add delay to ensure all nodes are up
+        # FIXED: Add randomized startup delay to prevent simultaneous elections
+        logger.info(f"Waiting {self._startup_delay:.2f}s before starting to prevent simultaneous elections...")
+        await asyncio.sleep(self._startup_delay)
+        
+        # FIXED: Add additional delay to ensure all nodes are up
         logger.info(f"Waiting for cluster to stabilize...")
         await asyncio.sleep(2.0)
         
@@ -143,8 +151,22 @@ class RaftNode:
         self.state.state = RaftNodeState.CANDIDATE.value
         self.current_leader = None
         
-        # Start election
-        asyncio.create_task(self._run_election())
+        # Start election with proper error handling
+        election_task = asyncio.create_task(self._run_election())
+        # Add callback to log any unhandled exceptions
+        election_task.add_done_callback(self._handle_election_task_done)
+        
+        logger.debug(f"Created election task for node {self.node_id}")
+    
+    def _handle_election_task_done(self, task: asyncio.Task):
+        """Handle completion of election task"""
+        try:
+            if task.exception():
+                logger.error(f"Election task failed for node {self.node_id}: {task.exception()}", exc_info=task.exception())
+            else:
+                logger.debug(f"Election task completed for node {self.node_id}")
+        except Exception as e:
+            logger.error(f"Error handling election task completion for node {self.node_id}: {e}")
     
     def transition_to_leader(self):
         """Transition to leader state"""
@@ -176,9 +198,14 @@ class RaftNode:
             self.election_timer_task.cancel()
         
         if self.running and self.state.state != RaftNodeState.LEADER.value:
-            timeout = random.uniform(*self.election_timeout_range)
+            # FIXED: Better randomization with node-specific offset
+            base_timeout = random.uniform(*self.election_timeout_range)
+            # Add a small node-specific offset to reduce simultaneous elections
+            node_offset = hash(self.node_id) % 1000 / 1000.0  # 0-1 second offset
+            timeout = base_timeout + node_offset
+            
             self.election_timer_task = asyncio.create_task(self._election_timeout(timeout))
-            logger.debug(f"Reset election timer with timeout {timeout:.3f}s")
+            logger.debug(f"Reset election timer with timeout {timeout:.3f}s (base: {base_timeout:.3f}s, offset: {node_offset:.3f}s)")
     
     async def _election_timeout(self, timeout: float):
         """Handle election timeout"""
@@ -195,8 +222,10 @@ class RaftNode:
     
     async def _run_election(self):
         """Run leader election"""
+        logger.info(f"Node {self.node_id} _run_election method starting")
         try:
             # Increment current term and vote for self
+            logger.info(f"Node {self.node_id} updating term and voting for self")
             await self.state.update_term(self.state.current_term + 1)
             await self.state.record_vote(self.node_id)
             
@@ -209,7 +238,7 @@ class RaftNode:
             votes_received = 1  # Vote for self
             votes_needed = (len(self.cluster_nodes) + 1) // 2
             
-            logger.info(f"Node {self.node_id} needs {votes_needed} votes to win election")
+            logger.info(f"Node {self.node_id} needs {votes_needed} votes to win election (cluster size: {len(self.cluster_nodes)})")
             
             vote_requests = []
             for node_id in self.cluster_nodes:
@@ -227,18 +256,22 @@ class RaftNode:
                 logger.info(f"Node {self.node_id} sending {len(vote_requests)} vote requests")
                 responses = await asyncio.gather(*vote_requests, return_exceptions=True)
                 
-                # Check if all responses are None (connection failures)
-                none_count = sum(1 for r in responses if r is None)
-                if none_count == len(responses):
-                    logger.error(f"Node {self.node_id} failed to connect to any other nodes during election")
-                    if self.state.state == RaftNodeState.CANDIDATE.value:
-                        self.transition_to_follower()
-                    return
+                # FIXED: Better logging and error handling
+                none_count = 0
+                exception_count = 0
+                response_count = 0
                 
                 for i, response in enumerate(responses):
                     peer_node = [n for n in self.cluster_nodes if n != self.node_id][i]
                     
-                    if isinstance(response, RequestVoteResponse):
+                    if response is None:
+                        none_count += 1
+                        logger.warning(f"Node {self.node_id} got None response from {peer_node}")
+                    elif isinstance(response, Exception):
+                        exception_count += 1
+                        logger.warning(f"Node {self.node_id} got exception from {peer_node}: {response}")
+                    elif isinstance(response, RequestVoteResponse):
+                        response_count += 1
                         if response.vote_granted:
                             votes_received += 1
                             logger.info(f"Node {self.node_id} received vote from {peer_node} (total: {votes_received}/{votes_needed})")
@@ -254,23 +287,39 @@ class RaftNode:
                         
                         # Check if we discovered a higher term
                         if response.term > self.state.current_term:
+                            logger.info(f"Node {self.node_id} discovered higher term {response.term}, stepping down")
                             await self.state.update_term(response.term)
                             self.transition_to_follower()
                             return
                     else:
-                        logger.warning(f"Node {self.node_id} failed to get vote from {peer_node}: {response}")
+                        logger.warning(f"Node {self.node_id} got unexpected response type from {peer_node}: {type(response)}")
+                
+                logger.info(f"Election results for {self.node_id}: {response_count} valid responses, {none_count} None, {exception_count} exceptions")
+                
+                # Check if we couldn't reach any nodes
+                if response_count == 0:
+                    logger.error(f"Node {self.node_id} failed to get any valid responses during election")
+                    if self.state.state == RaftNodeState.CANDIDATE.value:
+                        # FIXED: Add small delay before transitioning to prevent rapid cycling
+                        await asyncio.sleep(random.uniform(0.5, 1.5))
+                        self.transition_to_follower()
+                    return
             
             # Did not win election
             logger.info(f"Node {self.node_id} lost election with {votes_received} votes (needed {votes_needed})")
             
             # Transition back to follower and wait for next timeout
             if self.state.state == RaftNodeState.CANDIDATE.value:
+                # FIXED: Add small delay before transitioning to prevent rapid cycling
+                await asyncio.sleep(random.uniform(0.5, 1.5))
                 self.transition_to_follower()
                 
         except Exception as e:
             logger.error(f"Error in election for node {self.node_id}: {e}", exc_info=True)
             # On error, transition back to follower
             if self.state.state == RaftNodeState.CANDIDATE.value:
+                # FIXED: Add small delay before transitioning to prevent rapid cycling
+                await asyncio.sleep(random.uniform(0.5, 1.5))
                 self.transition_to_follower()
     
     async def _request_vote(self, node_id: str, request: RequestVoteRequest) -> Optional[RequestVoteResponse]:

@@ -18,7 +18,7 @@ class RaftDemoRunner:
     
     def __init__(self, nodes: Dict[str, str]):
         self.nodes = nodes
-        self.client = httpx.AsyncClient(timeout=5.0)
+        self.client = httpx.AsyncClient(timeout=15.0)
         
     async def close(self):
         """Cleanup"""
@@ -78,7 +78,7 @@ class RaftDemoRunner:
         """Stop a node using docker"""
         try:
             subprocess.run(
-                ["docker compose", "-f", "docker-compose-raft.yml", "stop", f"raft-{node_id}"],
+                ["docker", "compose", "-f", "docker-compose-raft.yml", "stop", f"raft-{node_id}"],
                 check=True,
                 capture_output=True
             )
@@ -90,7 +90,7 @@ class RaftDemoRunner:
         """Start a node using docker"""
         try:
             subprocess.run(
-                ["docker compose", "-f", "docker-compose-raft.yml", "start", f"raft-{node_id}"],
+                ["docker", "compose", "-f", "docker-compose-raft.yml", "start", f"raft-{node_id}"],
                 check=True,
                 capture_output=True
             )
@@ -98,7 +98,7 @@ class RaftDemoRunner:
         except Exception as e:
             print(f"✗ Failed to start {node_id}: {e}")
     
-    async def wait_for_leader(self, timeout: int = 20) -> bool:
+    async def wait_for_leader(self, timeout: int = 30) -> bool:
         """Wait for a leader to be elected"""
         start = time.time()
         while time.time() - start < timeout:
@@ -220,7 +220,16 @@ async def main():
         
         # Wait for cluster to stabilize
         print("Waiting for cluster to initialize...")
-        await asyncio.sleep(5)
+        await asyncio.sleep(10)  # FIXED: Longer wait for cluster stabilization
+        
+        # Check if any nodes are reachable
+        status = await runner.get_cluster_status()
+        online_nodes = [node for node, stat in status.items() if stat.get("status") != "offline"]
+        print(f"Online nodes: {online_nodes}")
+        
+        if not online_nodes:
+            print("✗ No nodes are reachable. Please check if the cluster is running.")
+            return
         
         # Run demos
         await runner.demo_leader_election()

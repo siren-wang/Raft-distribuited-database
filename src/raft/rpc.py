@@ -52,7 +52,7 @@ class AppendEntriesResponse:
 class RaftRPCClient:
     """Client for making RPC calls to other Raft nodes"""
     
-    def __init__(self, node_id: str, timeout: float = 5.0):  # FIXED: Increased default timeout
+    def __init__(self, node_id: str, timeout: float = 10.0):  # FIXED: Longer default timeout
         self.node_id = node_id
         self.timeout = timeout
         self.clients: Dict[str, httpx.AsyncClient] = {}
@@ -64,7 +64,12 @@ class RaftRPCClient:
                 # FIXED: Create client with better timeout configuration
                 self.clients[node_id] = httpx.AsyncClient(
                     base_url=f"http://{address}",
-                    timeout=httpx.Timeout(self.timeout),
+                    timeout=httpx.Timeout(
+                        connect=5.0,    # Connection timeout
+                        read=self.timeout,     # Read timeout
+                        write=5.0,      # Write timeout
+                        pool=self.timeout      # Pool timeout
+                    ),
                     limits=httpx.Limits(
                         max_keepalive_connections=5,
                         max_connections=10,
@@ -104,15 +109,6 @@ class RaftRPCClient:
             return None
         except httpx.TimeoutException as e:
             logger.debug(f"RequestVote to {target_node} failed - timeout: {e}")
-            return None
-        except Exception as e:
-            logger.error(f"RequestVote to {target_node} failed with unexpected error: {e}")
-            return None
-        except httpx.ConnectError as e:
-            logger.warning(f"RequestVote to {target_node} failed - connection error: {e}")
-            return None
-        except httpx.TimeoutException as e:
-            logger.warning(f"RequestVote to {target_node} failed - timeout: {e}")
             return None
         except Exception as e:
             logger.error(f"RequestVote to {target_node} failed with unexpected error: {e}")
@@ -172,120 +168,166 @@ class RaftRPCHandler:
         """Handle incoming RequestVote RPC"""
         logger.debug(f"Node {self.node.node_id} handling RequestVote from {request.candidate_id} for term {request.term}")
         
-        async with self.node.state._state_lock:
-            current_term = self.node.state.current_term
-            
-            # Reply false if term < currentTerm
-            if request.term < current_term:
-                logger.debug(f"Rejecting vote request from {request.candidate_id}: "
-                           f"outdated term {request.term} < {current_term}")
-                return RequestVoteResponse(term=current_term, vote_granted=False)
-            
-            # Update term if necessary
-            if request.term > current_term:
-                await self.node.state.update_term(request.term)
+        # Use a non-blocking approach to avoid deadlocks with election process
+        current_term = self.node.state.current_term
+        voted_for = self.node.state.voted_for
+        
+        # Reply false if term < currentTerm
+        if request.term < current_term:
+            logger.debug(f"Rejecting vote request from {request.candidate_id}: "
+                       f"outdated term {request.term} < {current_term}")
+            return RequestVoteResponse(term=current_term, vote_granted=False)
+        
+        # Update term if necessary - use a shorter timeout to avoid blocking elections
+        if request.term > current_term:
+            try:
+                await asyncio.wait_for(
+                    self.node.state.update_term(request.term),
+                    timeout=2.0  # Short timeout to avoid blocking elections
+                )
                 self.node.transition_to_follower()
-            
-            # Check if we've already voted
-            if self.node.state.voted_for is not None and self.node.state.voted_for != request.candidate_id:
-                logger.debug(f"Rejecting vote request from {request.candidate_id}: "
-                           f"already voted for {self.node.state.voted_for}")
-                return RequestVoteResponse(term=self.node.state.current_term, vote_granted=False)
-            
-            # Check log completeness
-            last_log_index = self.node.state.get_last_log_index()
-            last_log_term = self.node.state.get_last_log_term()
-            
-            log_is_current = (request.last_log_term > last_log_term or 
-                            (request.last_log_term == last_log_term and 
-                             request.last_log_index >= last_log_index))
-            
-            if log_is_current:
-                # Grant vote
-                await self.node.state.record_vote(request.candidate_id)
+                # Refresh our view of the state
+                current_term = self.node.state.current_term
+                voted_for = self.node.state.voted_for
+            except asyncio.TimeoutError:
+                logger.warning(f"Vote handler timed out updating term for {request.candidate_id}, rejecting vote")
+                return RequestVoteResponse(term=current_term, vote_granted=False)
+            except Exception as e:
+                logger.error(f"Failed to update term in vote handler: {e}")
+                return RequestVoteResponse(term=current_term, vote_granted=False)
+        
+        # Check if we've already voted
+        if voted_for is not None and voted_for != request.candidate_id:
+            logger.debug(f"Rejecting vote request from {request.candidate_id}: "
+                       f"already voted for {voted_for}")
+            return RequestVoteResponse(term=current_term, vote_granted=False)
+        
+        # Check log completeness
+        last_log_index = self.node.state.get_last_log_index()
+        last_log_term = self.node.state.get_last_log_term()
+        
+        log_is_current = (request.last_log_term > last_log_term or 
+                        (request.last_log_term == last_log_term and 
+                         request.last_log_index >= last_log_index))
+        
+        if log_is_current:
+            # Grant vote - use a shorter timeout to avoid blocking elections
+            try:
+                await asyncio.wait_for(
+                    self.node.state.record_vote(request.candidate_id),
+                    timeout=2.0  # Short timeout to avoid blocking elections
+                )
                 self.node.reset_election_timer()
                 logger.info(f"Node {self.node.node_id} granted vote to {request.candidate_id} for term {request.term}")
                 return RequestVoteResponse(term=self.node.state.current_term, vote_granted=True)
-            else:
-                logger.debug(f"Rejecting vote request from {request.candidate_id}: "
-                           f"candidate log not up-to-date")
-                return RequestVoteResponse(term=self.node.state.current_term, vote_granted=False)
+            except asyncio.TimeoutError:
+                logger.warning(f"Vote handler timed out recording vote for {request.candidate_id}, rejecting vote")
+                return RequestVoteResponse(term=current_term, vote_granted=False)
+            except Exception as e:
+                logger.error(f"Failed to record vote in vote handler: {e}")
+                return RequestVoteResponse(term=current_term, vote_granted=False)
+        else:
+            logger.debug(f"Rejecting vote request from {request.candidate_id}: "
+                       f"candidate log not up-to-date")
+            return RequestVoteResponse(term=current_term, vote_granted=False)
     
     async def handle_append_entries(self, request: AppendEntriesRequest) -> AppendEntriesResponse:
         """Handle incoming AppendEntries RPC"""
-        async with self.node.state._state_lock:
-            current_term = self.node.state.current_term
-            
-            # Reply false if term < currentTerm
-            if request.term < current_term:
-                logger.debug(f"Rejecting AppendEntries from {request.leader_id}: "
-                           f"outdated term {request.term} < {current_term}")
+        # Use a non-blocking approach to avoid deadlocks
+        current_term = self.node.state.current_term
+        
+        # Reply false if term < currentTerm
+        if request.term < current_term:
+            logger.debug(f"Rejecting AppendEntries from {request.leader_id}: "
+                       f"outdated term {request.term} < {current_term}")
+            return AppendEntriesResponse(term=current_term, success=False)
+        
+        # Update term and convert to follower if necessary - use shorter timeout
+        if request.term > current_term:
+            try:
+                await asyncio.wait_for(
+                    self.node.state.update_term(request.term),
+                    timeout=2.0  # Short timeout to avoid blocking elections
+                )
+                current_term = self.node.state.current_term
+            except asyncio.TimeoutError:
+                logger.warning(f"AppendEntries handler timed out updating term from {request.leader_id}")
                 return AppendEntriesResponse(term=current_term, success=False)
-            
-            # Update term and convert to follower if necessary
-            if request.term > current_term:
-                await self.node.state.update_term(request.term)
-            
-            # Always transition to follower when receiving valid AppendEntries
-            if self.node.state.state != "follower":
-                self.node.transition_to_follower()
-            
-            # Reset election timer
-            self.node.reset_election_timer()
-            self.node.current_leader = request.leader_id
-            
-            # FIXED: Log heartbeat reception
-            if not request.entries:
-                logger.debug(f"Node {self.node.node_id} received heartbeat from leader {request.leader_id}")
-            
-            # Check if we have the previous log entry
-            if request.prev_log_index > 0:
-                prev_entry = self.node.state.get_log_entry(request.prev_log_index)
-                if not prev_entry or prev_entry.term != request.prev_log_term:
-                    logger.debug(f"Log consistency check failed at index {request.prev_log_index}")
+            except Exception as e:
+                logger.error(f"Failed to update term in append_entries handler: {e}")
+                return AppendEntriesResponse(term=current_term, success=False)
+        
+        # Always transition to follower when receiving valid AppendEntries
+        if self.node.state.state != "follower":
+            self.node.transition_to_follower()
+        
+        # Reset election timer
+        self.node.reset_election_timer()
+        self.node.current_leader = request.leader_id
+        
+        # FIXED: Log heartbeat reception
+        if not request.entries:
+            logger.debug(f"Node {self.node.node_id} received heartbeat from leader {request.leader_id}")
+        
+        # For log operations, use a very short timeout to avoid blocking
+        try:
+            async with asyncio.timeout(1.0):  # Very short timeout for log operations
+                async with self.node.state._state_lock:
+                    # Check if we have the previous log entry
+                    if request.prev_log_index > 0:
+                        prev_entry = self.node.state.get_log_entry(request.prev_log_index)
+                        if not prev_entry or prev_entry.term != request.prev_log_term:
+                            logger.debug(f"Log consistency check failed at index {request.prev_log_index}")
+                            return AppendEntriesResponse(
+                                term=self.node.state.current_term, 
+                                success=False,
+                                match_index=self.node.state.get_last_log_index()
+                            )
+                    
+                    # Delete conflicting entries and append new ones
+                    if request.entries:
+                        # Find the point of divergence
+                        new_entries = []
+                        for i, entry_dict in enumerate(request.entries):
+                            entry_index = request.prev_log_index + i + 1
+                            existing_entry = self.node.state.get_log_entry(entry_index)
+                            
+                            if existing_entry and existing_entry.term != entry_dict["term"]:
+                                # Delete this and all following entries
+                                await self.node.state.delete_conflicting_entries(entry_index)
+                                new_entries = request.entries[i:]
+                                break
+                            elif not existing_entry:
+                                new_entries = request.entries[i:]
+                                break
+                        
+                        # Append new entries
+                        if new_entries:
+                            from .state import LogEntry
+                            entries_to_append = [LogEntry.from_dict(e) for e in new_entries]
+                            await self.node.state.append_entries(entries_to_append)
+                    
+                    # Update commit index
+                    if request.leader_commit > self.node.state.commit_index:
+                        self.node.state.commit_index = min(
+                            request.leader_commit,
+                            self.node.state.get_last_log_index()
+                        )
+                        # Trigger state machine application
+                        asyncio.create_task(self.node.apply_committed_entries())
+                    
                     return AppendEntriesResponse(
-                        term=self.node.state.current_term, 
-                        success=False,
+                        term=self.node.state.current_term,
+                        success=True,
                         match_index=self.node.state.get_last_log_index()
                     )
-            
-            # Delete conflicting entries and append new ones
-            if request.entries:
-                # Find the point of divergence
-                new_entries = []
-                for i, entry_dict in enumerate(request.entries):
-                    entry_index = request.prev_log_index + i + 1
-                    existing_entry = self.node.state.get_log_entry(entry_index)
-                    
-                    if existing_entry and existing_entry.term != entry_dict["term"]:
-                        # Delete this and all following entries
-                        await self.node.state.delete_conflicting_entries(entry_index)
-                        new_entries = request.entries[i:]
-                        break
-                    elif not existing_entry:
-                        new_entries = request.entries[i:]
-                        break
-                
-                # Append new entries
-                if new_entries:
-                    from .state import LogEntry
-                    entries_to_append = [LogEntry.from_dict(e) for e in new_entries]
-                    await self.node.state.append_entries(entries_to_append)
-            
-            # Update commit index
-            if request.leader_commit > self.node.state.commit_index:
-                self.node.state.commit_index = min(
-                    request.leader_commit,
-                    self.node.state.get_last_log_index()
-                )
-                # Trigger state machine application
-                asyncio.create_task(self.node.apply_committed_entries())
-            
-            return AppendEntriesResponse(
-                term=self.node.state.current_term,
-                success=True,
-                match_index=self.node.state.get_last_log_index()
-            )
+        
+        except asyncio.TimeoutError:
+            logger.warning(f"AppendEntries handler timed out processing log operations from {request.leader_id}")
+            return AppendEntriesResponse(term=current_term, success=False)
+        except Exception as e:
+            logger.error(f"Error in append_entries handler: {e}", exc_info=True)
+            return AppendEntriesResponse(term=current_term, success=False)
 
 
 class BatchedAppendEntries:
