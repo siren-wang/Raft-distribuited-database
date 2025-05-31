@@ -36,8 +36,8 @@ class RaftNode:
                  node_id: str,
                  cluster_config: Dict[str, str],
                  state_dir: str = "./raft_state",
-                 election_timeout_range: Tuple[float, float] = (0.15, 0.3),
-                 heartbeat_interval: float = 0.05):
+                 election_timeout_range: Tuple[float, float] = (1.5, 3.0),  # FIXED: Increased timeout
+                 heartbeat_interval: float = 0.5):  # FIXED: Increased interval
         """
         Initialize Raft node
         
@@ -56,7 +56,7 @@ class RaftNode:
         self.state = RaftState(node_id, state_dir)
         
         # RPC handling
-        self.rpc_client = RaftRPCClient(node_id)
+        self.rpc_client = RaftRPCClient(node_id, timeout=5.0)  # FIXED: Increased timeout
         self.rpc_handler = RaftRPCHandler(self)
         self.batched_append = BatchedAppendEntries(self.rpc_client)
         
@@ -77,6 +77,7 @@ class RaftNode:
         self._shutdown_event = asyncio.Event()
         
         logger.info(f"Initialized RaftNode {node_id} with {len(cluster_config)} nodes in cluster")
+        logger.info(f"Election timeout range: {election_timeout_range}, Heartbeat interval: {heartbeat_interval}")
     
     async def start(self):
         """Start the Raft node"""
@@ -87,6 +88,10 @@ class RaftNode:
         
         # Initialize RPC client
         await self.rpc_client.initialize(self.cluster_config)
+        
+        # FIXED: Add delay to ensure all nodes are up
+        logger.info(f"Waiting for cluster to stabilize...")
+        await asyncio.sleep(2.0)
         
         # Start as follower
         self.transition_to_follower()
@@ -181,10 +186,11 @@ class RaftNode:
             await asyncio.sleep(timeout)
             
             if self.state.state == RaftNodeState.FOLLOWER.value:
-                logger.info(f"Election timeout on node {self.node_id}")
+                logger.info(f"Election timeout on node {self.node_id} after {timeout:.3f}s")
                 self.transition_to_candidate()
                 
         except asyncio.CancelledError:
+            logger.debug(f"Election timer cancelled for node {self.node_id}")
             pass
     
     async def _run_election(self):
@@ -202,6 +208,8 @@ class RaftNode:
         votes_received = 1  # Vote for self
         votes_needed = (len(self.cluster_nodes) + 1) // 2
         
+        logger.info(f"Node {self.node_id} needs {votes_needed} votes to win election")
+        
         vote_requests = []
         for node_id in self.cluster_nodes:
             if node_id != self.node_id:
@@ -217,10 +225,13 @@ class RaftNode:
         if vote_requests:
             responses = await asyncio.gather(*vote_requests, return_exceptions=True)
             
-            for response in responses:
+            for i, response in enumerate(responses):
+                peer_node = [n for n in self.cluster_nodes if n != self.node_id][i]
+                
                 if isinstance(response, RequestVoteResponse):
                     if response.vote_granted:
                         votes_received += 1
+                        logger.info(f"Node {self.node_id} received vote from {peer_node} (total: {votes_received}/{votes_needed})")
                         
                         if votes_received >= votes_needed:
                             # Won election
@@ -228,15 +239,19 @@ class RaftNode:
                                 logger.info(f"Node {self.node_id} won election with {votes_received} votes")
                                 self.transition_to_leader()
                             return
+                    else:
+                        logger.info(f"Node {self.node_id} vote denied by {peer_node} (term: {response.term})")
                     
                     # Check if we discovered a higher term
                     if response.term > self.state.current_term:
                         await self.state.update_term(response.term)
                         self.transition_to_follower()
                         return
+                else:
+                    logger.debug(f"Node {self.node_id} failed to get vote from {peer_node}: {response}")
         
         # Did not win election
-        logger.info(f"Node {self.node_id} lost election with {votes_received} votes")
+        logger.info(f"Node {self.node_id} lost election with {votes_received} votes (needed {votes_needed})")
         
         # Stay as candidate and wait for next timeout
         if self.state.state == RaftNodeState.CANDIDATE.value:
@@ -244,6 +259,7 @@ class RaftNode:
     
     async def _request_vote(self, node_id: str, request: RequestVoteRequest) -> Optional[RequestVoteResponse]:
         """Request vote from a single node"""
+        logger.debug(f"Node {self.node_id} requesting vote from {node_id}")
         return await self.rpc_client.request_vote(node_id, request)
     
     async def _heartbeat_loop(self):
@@ -254,12 +270,15 @@ class RaftNode:
                 await asyncio.sleep(self.heartbeat_interval)
                 
         except asyncio.CancelledError:
+            logger.debug(f"Heartbeat loop cancelled for node {self.node_id}")
             pass
     
     async def _send_heartbeats(self):
         """Send heartbeats to all followers"""
         if self.state.state != RaftNodeState.LEADER.value:
             return
+        
+        logger.debug(f"Leader {self.node_id} sending heartbeats")
         
         heartbeat_tasks = []
         for node_id in self.cluster_nodes:
@@ -331,6 +350,9 @@ class RaftNode:
     
     async def _run_state_machine(self):
         """Background task to apply committed entries to state machine"""
+        # FIXED: Add initial delay to ensure everything is ready
+        await asyncio.sleep(1.0)
+        
         while self.running:
             try:
                 # Check for committed entries to apply
@@ -345,7 +367,7 @@ class RaftNode:
                             logger.error(f"Failed to apply command: {e}")
                 
                 # Wait before checking again
-                await asyncio.sleep(0.01)
+                await asyncio.sleep(0.1)
                 
             except asyncio.CancelledError:
                 break

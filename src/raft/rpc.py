@@ -52,7 +52,7 @@ class AppendEntriesResponse:
 class RaftRPCClient:
     """Client for making RPC calls to other Raft nodes"""
     
-    def __init__(self, node_id: str, timeout: float = 1.0):
+    def __init__(self, node_id: str, timeout: float = 5.0):  # FIXED: Increased default timeout
         self.node_id = node_id
         self.timeout = timeout
         self.clients: Dict[str, httpx.AsyncClient] = {}
@@ -61,11 +61,22 @@ class RaftRPCClient:
         """Initialize HTTP clients for each node in the cluster"""
         for node_id, address in cluster_config.items():
             if node_id != self.node_id:
+                # FIXED: Create client with better timeout configuration
                 self.clients[node_id] = httpx.AsyncClient(
                     base_url=f"http://{address}",
-                    timeout=self.timeout
+                    timeout=httpx.Timeout(
+                        total=self.timeout,
+                        connect=5.0,  # Connection timeout
+                        read=5.0,     # Read timeout
+                        write=5.0     # Write timeout
+                    ),
+                    limits=httpx.Limits(
+                        max_keepalive_connections=5,
+                        max_connections=10,
+                        keepalive_expiry=30.0
+                    )
                 )
-        logger.info(f"Initialized RPC clients for {len(self.clients)} peers")
+        logger.info(f"Initialized RPC clients for {len(self.clients)} peers with timeout={self.timeout}s")
     
     async def close(self):
         """Close all HTTP clients"""
@@ -79,6 +90,7 @@ class RaftRPCClient:
             return None
         
         try:
+            logger.debug(f"Sending RequestVote from {self.node_id} to {target_node} for term {request.term}")
             response = await self.clients[target_node].post(
                 "/raft/request_vote",
                 json=asdict(request)
@@ -86,13 +98,20 @@ class RaftRPCClient:
             
             if response.status_code == 200:
                 data = response.json()
+                logger.debug(f"RequestVote response from {target_node}: granted={data.get('vote_granted')}, term={data.get('term')}")
                 return RequestVoteResponse(**data)
             else:
                 logger.warning(f"RequestVote to {target_node} failed with status {response.status_code}")
                 return None
                 
+        except httpx.ConnectError as e:
+            logger.debug(f"RequestVote to {target_node} failed - connection error: {e}")
+            return None
+        except httpx.TimeoutException as e:
+            logger.debug(f"RequestVote to {target_node} failed - timeout: {e}")
+            return None
         except Exception as e:
-            logger.debug(f"RequestVote to {target_node} failed: {e}")
+            logger.error(f"RequestVote to {target_node} failed with unexpected error: {e}")
             return None
     
     async def append_entries(self, target_node: str, request: AppendEntriesRequest) -> Optional[AppendEntriesResponse]:
@@ -114,8 +133,14 @@ class RaftRPCClient:
                 logger.warning(f"AppendEntries to {target_node} failed with status {response.status_code}")
                 return None
                 
+        except httpx.ConnectError as e:
+            logger.debug(f"AppendEntries to {target_node} failed - connection error: {e}")
+            return None
+        except httpx.TimeoutException as e:
+            logger.debug(f"AppendEntries to {target_node} failed - timeout: {e}")
+            return None
         except Exception as e:
-            logger.debug(f"AppendEntries to {target_node} failed: {e}")
+            logger.error(f"AppendEntries to {target_node} failed with unexpected error: {e}")
             return None
     
     async def send_heartbeat(self, target_node: str, term: int, leader_id: str, 
@@ -141,6 +166,8 @@ class RaftRPCHandler:
     
     async def handle_request_vote(self, request: RequestVoteRequest) -> RequestVoteResponse:
         """Handle incoming RequestVote RPC"""
+        logger.debug(f"Node {self.node.node_id} handling RequestVote from {request.candidate_id} for term {request.term}")
+        
         async with self.node.state._state_lock:
             current_term = self.node.state.current_term
             
@@ -173,7 +200,7 @@ class RaftRPCHandler:
                 # Grant vote
                 await self.node.state.record_vote(request.candidate_id)
                 self.node.reset_election_timer()
-                logger.info(f"Granted vote to {request.candidate_id} for term {request.term}")
+                logger.info(f"Node {self.node.node_id} granted vote to {request.candidate_id} for term {request.term}")
                 return RequestVoteResponse(term=self.node.state.current_term, vote_granted=True)
             else:
                 logger.debug(f"Rejecting vote request from {request.candidate_id}: "
@@ -202,6 +229,10 @@ class RaftRPCHandler:
             # Reset election timer
             self.node.reset_election_timer()
             self.node.current_leader = request.leader_id
+            
+            # FIXED: Log heartbeat reception
+            if not request.entries:
+                logger.debug(f"Node {self.node.node_id} received heartbeat from leader {request.leader_id}")
             
             # Check if we have the previous log entry
             if request.prev_log_index > 0:
