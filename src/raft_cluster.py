@@ -61,7 +61,7 @@ class RaftClusterNode:
         """Start the Raft node"""
         logger.info(f"Starting Raft node {self.node_id}...")
         
-        # Create Raft KV store
+        # Create Raft KV store but DON'T start it yet
         self.raft_store = RaftKVStore(
             node_id=self.node_id,
             cluster_config=self.cluster_config,
@@ -70,15 +70,14 @@ class RaftClusterNode:
             wal_dir=self.wal_dir
         )
         
-        # Start Raft components
-        await self.raft_store.start()
-
-        await asyncio.sleep(1.0)
+        # Initialize components (but don't start Raft consensus yet)
+        await self.raft_store.kv_store.initialize()
+        await self.raft_store.wal.initialize()
         
-        # Create FastAPI app
+        # Create FastAPI app FIRST
         self.app = create_raft_api(self.raft_store)
         
-        # Configure and start server
+        # Configure and start HTTP server in background
         config = uvicorn.Config(
             self.app,
             host="0.0.0.0",
@@ -87,10 +86,22 @@ class RaftClusterNode:
         )
         self.server = uvicorn.Server(config)
         
-        logger.info(f"Raft node {self.node_id} started on port {self.node_port}")
+        # Start HTTP server in background task
+        server_task = asyncio.create_task(self.server.serve())
         
-        # Run server
-        await self.server.serve()
+        # Wait for HTTP server to be ready
+        logger.info(f"Waiting for HTTP server to be ready on port {self.node_port}...")
+        await asyncio.sleep(3.0)  # Give time for HTTP server to start
+        
+        # NOW start the Raft consensus (which will start elections)
+        logger.info(f"Starting Raft consensus for node {self.node_id}")
+        await self.raft_store.raft_node.start()
+        await self.raft_store._recover_from_wal()
+        
+        logger.info(f"Raft node {self.node_id} started successfully")
+        
+        # Wait for server task
+        await server_task
     
     async def stop(self):
         """Stop the Raft node"""
