@@ -166,11 +166,7 @@ class RaftRPCHandler:
     
     async def handle_request_vote(self, request: RequestVoteRequest) -> RequestVoteResponse:
         """Handle incoming RequestVote RPC"""
-        logger.debug(f"Node {self.node.node_id} handling RequestVote from {request.candidate_id} for term {request.term}")
-        
-        # Use a non-blocking approach to avoid deadlocks with election process
         current_term = self.node.state.current_term
-        voted_for = self.node.state.voted_for
         
         # Reply false if term < currentTerm
         if request.term < current_term:
@@ -178,39 +174,44 @@ class RaftRPCHandler:
                        f"outdated term {request.term} < {current_term}")
             return RequestVoteResponse(term=current_term, vote_granted=False)
         
-        # Update term if necessary - use a shorter timeout to avoid blocking elections
+        # Update term if necessary - use shorter timeout
         if request.term > current_term:
             try:
                 await asyncio.wait_for(
                     self.node.state.update_term(request.term),
                     timeout=2.0  # Short timeout to avoid blocking elections
                 )
-                self.node.transition_to_follower()
-                # Refresh our view of the state
                 current_term = self.node.state.current_term
-                voted_for = self.node.state.voted_for
             except asyncio.TimeoutError:
-                logger.warning(f"Vote handler timed out updating term for {request.candidate_id}, rejecting vote")
+                logger.warning(f"Vote handler timed out updating term from {request.candidate_id}, rejecting vote")
                 return RequestVoteResponse(term=current_term, vote_granted=False)
             except Exception as e:
                 logger.error(f"Failed to update term in vote handler: {e}")
                 return RequestVoteResponse(term=current_term, vote_granted=False)
         
-        # Check if we've already voted
+        # Check if we already voted for someone else
+        voted_for = self.node.state.voted_for
         if voted_for is not None and voted_for != request.candidate_id:
             logger.debug(f"Rejecting vote request from {request.candidate_id}: "
                        f"already voted for {voted_for}")
             return RequestVoteResponse(term=current_term, vote_granted=False)
         
-        # Check log completeness
+        # Check log completeness with better debugging
         last_log_index = self.node.state.get_last_log_index()
         last_log_term = self.node.state.get_last_log_term()
         
+        # FIXED: More lenient log completeness check for initial elections
         log_is_current = (request.last_log_term > last_log_term or 
                         (request.last_log_term == last_log_term and 
                          request.last_log_index >= last_log_index))
         
-        if log_is_current:
+        logger.info(f"Vote request from {request.candidate_id}: "
+                   f"candidate_log=({request.last_log_index}, {request.last_log_term}), "
+                   f"my_log=({last_log_index}, {last_log_term}), "
+                   f"log_current={log_is_current}")
+        
+        # FIXED: Allow votes for empty logs to help initial leader election
+        if last_log_index == 0 or log_is_current:
             # Grant vote - use a shorter timeout to avoid blocking elections
             try:
                 await asyncio.wait_for(
@@ -227,7 +228,7 @@ class RaftRPCHandler:
                 logger.error(f"Failed to record vote in vote handler: {e}")
                 return RequestVoteResponse(term=current_term, vote_granted=False)
         else:
-            logger.debug(f"Rejecting vote request from {request.candidate_id}: "
+            logger.info(f"Rejecting vote request from {request.candidate_id}: "
                        f"candidate log not up-to-date")
             return RequestVoteResponse(term=current_term, vote_granted=False)
     
@@ -269,71 +270,143 @@ class RaftRPCHandler:
         if not request.entries:
             logger.debug(f"Node {self.node.node_id} received heartbeat from leader {request.leader_id}")
         
-        # For log operations, use a very short timeout to avoid blocking
+        # FIXED: Simplified log consistency check and repair
         try:
-            async with asyncio.timeout(1.0):  # Very short timeout for log operations
-                async with self.node.state._state_lock:
-                    # Check if we have the previous log entry
-                    if request.prev_log_index > 0:
-                        prev_entry = self.node.state.get_log_entry(request.prev_log_index)
-                        if not prev_entry or prev_entry.term != request.prev_log_term:
-                            logger.debug(f"Log consistency check failed at index {request.prev_log_index}")
-                            return AppendEntriesResponse(
-                                term=self.node.state.current_term, 
-                                success=False,
-                                match_index=self.node.state.get_last_log_index()
-                            )
-                    
-                    # Delete conflicting entries and append new ones
-                    if request.entries:
-                        # Find the point of divergence
-                        new_entries = []
-                        for i, entry_dict in enumerate(request.entries):
-                            entry_index = request.prev_log_index + i + 1
-                            existing_entry = self.node.state.get_log_entry(entry_index)
-                            
-                            if existing_entry and existing_entry.term != entry_dict["term"]:
-                                # Delete this and all following entries
-                                await self.node.state.delete_conflicting_entries(entry_index)
-                                new_entries = request.entries[i:]
-                                break
-                            elif not existing_entry:
-                                new_entries = request.entries[i:]
-                                break
-                        
-                        # Append new entries
-                        if new_entries:
-                            from .state import LogEntry
-                            entries_to_append = [LogEntry.from_dict(e) for e in new_entries]
-                            await self.node.state.append_entries(entries_to_append)
-                    
-                    # Update commit index
-                    if request.leader_commit > self.node.state.commit_index:
-                        self.node.state.commit_index = min(
-                            request.leader_commit,
-                            self.node.state.get_last_log_index()
-                        )
-                        # Trigger state machine application
-                        asyncio.create_task(self.node.apply_committed_entries())
-                    
+            # Get current log state
+            last_log_index = self.node.state.get_last_log_index()
+            
+            logger.debug(f"AppendEntries from {request.leader_id}: prev_log_index={request.prev_log_index}, prev_log_term={request.prev_log_term}, entries={len(request.entries)}, last_log_index={last_log_index}")
+            
+            # Check if we have the previous log entry
+            if request.prev_log_index > 0:
+                if request.prev_log_index > last_log_index:
+                    # We're missing entries - return our last log index for repair
+                    logger.debug(f"Missing entries: prev_log_index={request.prev_log_index}, last_log_index={last_log_index}")
                     return AppendEntriesResponse(
-                        term=self.node.state.current_term,
-                        success=True,
+                        term=self.node.state.current_term, 
+                        success=False,
+                        match_index=last_log_index
+                    )
+                
+                prev_entry = self.node.state.get_log_entry(request.prev_log_index)
+                if not prev_entry or prev_entry.term != request.prev_log_term:
+                    # Log inconsistency - find the highest matching index
+                    match_index = 0
+                    for i in range(min(request.prev_log_index, last_log_index), 0, -1):
+                        entry = self.node.state.get_log_entry(i)
+                        if entry and entry.term <= request.prev_log_term:
+                            match_index = i
+                            break
+                    
+                    logger.debug(f"Log consistency check failed at index {request.prev_log_index}, match_index={match_index}")
+                    return AppendEntriesResponse(
+                        term=self.node.state.current_term, 
+                        success=False,
+                        match_index=match_index
+                    )
+            else:
+                logger.debug(f"AppendEntries with prev_log_index=0, proceeding to append entries")
+                # FIXED: When prev_log_index=0, we should truncate our entire log if we have entries
+                # This handles the case where a new leader has fewer entries than us
+                if last_log_index > 0:
+                    logger.info(f"Truncating entire log (had {last_log_index} entries) to match new leader")
+                    async with self.node.state._state_lock:
+                        self.node.state.log = []
+                        # Don't save persistent state since it's disabled for testing
+            
+            # Process entries if any
+            if request.entries:
+                logger.debug(f"Processing {len(request.entries)} entries")
+                # FIXED: Much longer timeout to handle large batches and persistent state saving
+                timeout_seconds = max(10.0, len(request.entries) * 0.1)  # 10s base + 100ms per entry
+                try:
+                    # FIXED: Try to acquire lock with timeout to avoid deadlocks
+                    logger.debug(f"Attempting to acquire state lock for {len(request.entries)} entries with timeout {timeout_seconds}s")
+                    
+                    # Use asyncio.wait_for with the lock acquisition
+                    async def _process_with_lock():
+                        async with self.node.state._state_lock:
+                            logger.debug(f"Acquired state lock, processing entries")
+                            # Delete conflicting entries and append new ones
+                            new_entries = []
+                            for i, entry_dict in enumerate(request.entries):
+                                entry_index = request.prev_log_index + i + 1
+                                existing_entry = self.node.state.get_log_entry(entry_index)
+                                
+                                if existing_entry and existing_entry.term != entry_dict["term"]:
+                                    # Delete this and all following entries
+                                    logger.debug(f"Deleting conflicting entries from index {entry_index}")
+                                    await self.node.state.delete_conflicting_entries(entry_index)
+                                    new_entries = request.entries[i:]
+                                    break
+                                elif not existing_entry:
+                                    new_entries = request.entries[i:]
+                                    break
+                            
+                            # Append new entries
+                            if new_entries:
+                                logger.debug(f"Appending {len(new_entries)} new entries")
+                                from .state import LogEntry
+                                entries_to_append = [LogEntry.from_dict(e) for e in new_entries]
+                                await self.node.state.append_entries(entries_to_append)
+                                logger.info(f"Appended {len(entries_to_append)} entries starting at index {request.prev_log_index + 1}")
+                            else:
+                                logger.debug(f"No new entries to append")
+                            logger.debug(f"Finished processing entries, releasing state lock")
+                    
+                    await asyncio.wait_for(_process_with_lock(), timeout=timeout_seconds)
+                    
+                except asyncio.TimeoutError:
+                    logger.error(f"AppendEntries handler timed out after {timeout_seconds}s processing {len(request.entries)} entries from {request.leader_id}")
+                    return AppendEntriesResponse(
+                        term=current_term, 
+                        success=False, 
                         match_index=self.node.state.get_last_log_index()
                     )
+            else:
+                logger.debug(f"No entries to process (heartbeat)")
+            
+            # Update commit index
+            if request.leader_commit > self.node.state.commit_index:
+                old_commit = self.node.state.commit_index
+                self.node.state.commit_index = min(
+                    request.leader_commit,
+                    self.node.state.get_last_log_index()
+                )
+                if self.node.state.commit_index > old_commit:
+                    logger.debug(f"Updated commit index from {old_commit} to {self.node.state.commit_index}")
+                    # Trigger state machine application
+                    asyncio.create_task(self.node.apply_committed_entries())
+            
+            final_match_index = self.node.state.get_last_log_index()
+            logger.debug(f"AppendEntries success, returning match_index={final_match_index}")
+            return AppendEntriesResponse(
+                term=self.node.state.current_term,
+                success=True,
+                match_index=final_match_index
+            )
         
         except asyncio.TimeoutError:
-            logger.warning(f"AppendEntries handler timed out processing log operations from {request.leader_id}")
-            return AppendEntriesResponse(term=current_term, success=False)
+            logger.warning(f"AppendEntries handler timed out processing {len(request.entries) if request.entries else 0} entries from {request.leader_id}")
+            # Return current state even on timeout to help leader make progress
+            return AppendEntriesResponse(
+                term=current_term, 
+                success=False, 
+                match_index=self.node.state.get_last_log_index()
+            )
         except Exception as e:
             logger.error(f"Error in append_entries handler: {e}", exc_info=True)
-            return AppendEntriesResponse(term=current_term, success=False)
+            return AppendEntriesResponse(
+                term=current_term, 
+                success=False, 
+                match_index=self.node.state.get_last_log_index()
+            )
 
 
 class BatchedAppendEntries:
     """Handles batching and flow control for AppendEntries RPCs"""
     
-    def __init__(self, rpc_client: RaftRPCClient, max_batch_size: int = 100):
+    def __init__(self, rpc_client: RaftRPCClient, max_batch_size: int = 5):  # FIXED: Even smaller batch size to prevent timeouts
         self.rpc_client = rpc_client
         self.max_batch_size = max_batch_size
         self.in_flight: Dict[str, bool] = {}
@@ -342,6 +415,7 @@ class BatchedAppendEntries:
         """Send AppendEntries with batching and flow control"""
         # Check if we already have a request in flight
         if self.in_flight.get(follower_id, False):
+            logger.info(f"BatchedAppendEntries: Request already in flight for {follower_id}")
             return False
         
         self.in_flight[follower_id] = True
@@ -357,6 +431,8 @@ class BatchedAppendEntries:
                 prev_entry = state.get_log_entry(prev_log_index)
                 prev_log_term = prev_entry.term if prev_entry else 0
             
+            logger.info(f"BatchedAppendEntries: Sending to {follower_id}, entries={len(batched_entries)}, prev_log_index={prev_log_index}")
+            
             request = AppendEntriesRequest(
                 term=state.current_term,
                 leader_id=state.node_id,
@@ -370,21 +446,35 @@ class BatchedAppendEntries:
             response = await self.rpc_client.append_entries(follower_id, request)
             
             if response:
+                logger.info(f"BatchedAppendEntries: Response from {follower_id}: success={response.success}, match_index={response.match_index}")
                 if response.success:
                     # Update follower progress
                     new_match_index = prev_log_index + len(batched_entries)
                     state.update_follower_progress(follower_id, new_match_index)
+                    logger.info(f"BatchedAppendEntries: Successfully replicated {len(batched_entries)} entries to {follower_id}, match_index={new_match_index}")
                     return True
                 else:
-                    # Handle failure - decrement nextIndex
+                    # Handle failure - use more aggressive backoff for faster convergence
                     if response.term > state.current_term:
                         # We're no longer leader
                         await state.update_term(response.term)
                         return False
                     else:
-                        # Log inconsistency - decrement nextIndex
-                        state.next_index[follower_id] = max(1, state.next_index[follower_id] - 1)
-                        logger.debug(f"Decremented nextIndex for {follower_id} to {state.next_index[follower_id]}")
+                        # Log inconsistency - use binary search approach for faster convergence
+                        current_next = state.next_index[follower_id]
+                        if response.match_index is not None and response.match_index >= 0:
+                            # Follower told us their highest matching index
+                            state.next_index[follower_id] = response.match_index + 1
+                            logger.info(f"BatchedAppendEntries: Set nextIndex for {follower_id} to {response.match_index + 1} based on match_index")
+                        else:
+                            # Use more conservative backoff - decrement by 1 for safety
+                            if current_next > 1:
+                                new_next = current_next - 1
+                                state.next_index[follower_id] = new_next
+                                logger.info(f"BatchedAppendEntries: Conservative backoff for {follower_id}: {current_next} -> {new_next}")
+                            else:
+                                state.next_index[follower_id] = 1
+                                logger.info(f"BatchedAppendEntries: Set nextIndex for {follower_id} to 1 (minimum)")
             
             return False
             

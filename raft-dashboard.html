@@ -1,0 +1,468 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+    <meta charset="UTF-8">
+    <meta name="viewport" content="width=device-width, initial-scale=1.0">
+    <title>Raft Consensus Visualization</title>
+    <script src="https://unpkg.com/react@18/umd/react.development.js"></script>
+    <script src="https://unpkg.com/react-dom@18/umd/react-dom.development.js"></script>
+    <script src="https://unpkg.com/@babel/standalone/babel.min.js"></script>
+    <script src="https://unpkg.com/lucide-react@latest/dist/umd/lucide-react.js"></script>
+    <style>
+        body {
+            margin: 0;
+            font-family: -apple-system, BlinkMacSystemFont, 'Segoe UI', 'Roboto', 'Oxygen',
+                'Ubuntu', 'Cantarell', 'Fira Sans', 'Droid Sans', 'Helvetica Neue',
+                sans-serif;
+            -webkit-font-smoothing: antialiased;
+            -moz-osx-font-smoothing: grayscale;
+            background-color: #f5f5f5;
+        }
+        
+        .p-6 { padding: 1.5rem; }
+        .max-w-7xl { max-width: 80rem; }
+        .mx-auto { margin-left: auto; margin-right: auto; }
+        .space-y-6 > * + * { margin-top: 1.5rem; }
+        .space-y-4 > * + * { margin-top: 1rem; }
+        .space-y-3 > * + * { margin-top: 0.75rem; }
+        .space-y-2 > * + * { margin-top: 0.5rem; }
+        .space-y-1 > * + * { margin-top: 0.25rem; }
+        
+        .text-center { text-align: center; }
+        .text-4xl { font-size: 2.25rem; line-height: 2.5rem; }
+        .text-2xl { font-size: 1.5rem; line-height: 2rem; }
+        .text-xl { font-size: 1.25rem; line-height: 1.75rem; }
+        .text-lg { font-size: 1.125rem; line-height: 1.75rem; }
+        .text-sm { font-size: 0.875rem; line-height: 1.25rem; }
+        .font-bold { font-weight: 700; }
+        .font-medium { font-weight: 500; }
+        .capitalize { text-transform: capitalize; }
+        
+        .grid { display: grid; }
+        .grid-cols-3 { grid-template-columns: repeat(3, minmax(0, 1fr)); }
+        .grid-cols-2 { grid-template-columns: repeat(2, minmax(0, 1fr)); }
+        .gap-4 { gap: 1rem; }
+        .gap-3 { gap: 0.75rem; }
+        .gap-2 { gap: 0.5rem; }
+        
+        .flex { display: flex; }
+        .items-center { align-items: center; }
+        .justify-between { justify-content: space-between; }
+        
+        .bg-white { background-color: #ffffff; }
+        .bg-green-50 { background-color: #f0fdf4; }
+        .bg-blue-50 { background-color: #eff6ff; }
+        .bg-yellow-50 { background-color: #fefce8; }
+        .bg-gray-100 { background-color: #f3f4f6; }
+        
+        .border { border-width: 1px; }
+        .border-2 { border-width: 2px; }
+        .border-green-500 { border-color: #10b981; }
+        .border-blue-300 { border-color: #93c5fd; }
+        .border-yellow-500 { border-color: #f59e0b; }
+        .border-gray-300 { border-color: #d1d5db; }
+        .rounded { border-radius: 0.375rem; }
+        .rounded-lg { border-radius: 0.5rem; }
+        
+        .p-4 { padding: 1rem; }
+        .p-6 { padding: 1.5rem; }
+        .pb-3 { padding-bottom: 0.75rem; }
+        .mt-3 { margin-top: 0.75rem; }
+        .mt-4 { margin-top: 1rem; }
+        .mb-2 { margin-bottom: 0.5rem; }
+        .mb-8 { margin-bottom: 2rem; }
+        
+        .text-green-600 { color: #059669; }
+        .text-blue-600 { color: #2563eb; }
+        .text-yellow-600 { color: #d97706; }
+        .text-gray-600 { color: #4b5563; }
+        .text-gray-400 { color: #9ca3af; }
+        .text-gray-500 { color: #6b7280; }
+        
+        .shadow { box-shadow: 0 1px 3px 0 rgba(0, 0, 0, 0.1), 0 1px 2px 0 rgba(0, 0, 0, 0.06); }
+        .transition-all { transition-property: all; transition-timing-function: cubic-bezier(0.4, 0, 0.2, 1); transition-duration: 150ms; }
+        .duration-300 { transition-duration: 300ms; }
+        
+        .w-5 { width: 1.25rem; }
+        .h-5 { height: 1.25rem; }
+        .w-4 { width: 1rem; }
+        .h-4 { height: 1rem; }
+        .max-h-64 { max-height: 16rem; }
+        .max-h-40 { max-height: 10rem; }
+        .overflow-hidden { overflow: hidden; }
+        .overflow-y-auto { overflow-y: auto; }
+        
+        .cursor-pointer { cursor: pointer; }
+        .hover\:bg-gray-50:hover { background-color: #f9fafb; }
+        
+        .btn {
+            display: inline-flex;
+            align-items: center;
+            justify-content: center;
+            padding: 0.5rem 1rem;
+            border-radius: 0.375rem;
+            font-size: 0.875rem;
+            font-weight: 500;
+            cursor: pointer;
+            border: 1px solid transparent;
+            transition: all 0.2s;
+        }
+        
+        .btn-primary {
+            background-color: #3b82f6;
+            color: white;
+        }
+        
+        .btn-primary:hover {
+            background-color: #2563eb;
+        }
+        
+        .btn-outline {
+            background-color: white;
+            color: #374151;
+            border-color: #d1d5db;
+        }
+        
+        .btn-outline:hover {
+            background-color: #f9fafb;
+        }
+        
+        .btn-destructive {
+            background-color: #ef4444;
+            color: white;
+        }
+        
+        .btn-destructive:hover {
+            background-color: #dc2626;
+        }
+        
+        .btn-sm {
+            padding: 0.25rem 0.5rem;
+            font-size: 0.75rem;
+        }
+        
+        .btn:disabled {
+            opacity: 0.5;
+            cursor: not-allowed;
+        }
+        
+        .badge {
+            display: inline-flex;
+            align-items: center;
+            padding: 0.125rem 0.5rem;
+            border-radius: 9999px;
+            font-size: 0.75rem;
+            font-weight: 500;
+        }
+        
+        .badge-success {
+            background-color: #dcfce7;
+            color: #166534;
+        }
+        
+        .badge-secondary {
+            background-color: #f1f5f9;
+            color: #475569;
+        }
+        
+        .alert {
+            padding: 1rem;
+            border-radius: 0.375rem;
+            border: 1px solid #e2e8f0;
+            background-color: #f8fafc;
+        }
+        
+        .card {
+            background-color: white;
+            border-radius: 0.5rem;
+            box-shadow: 0 1px 3px 0 rgba(0, 0, 0, 0.1);
+            border: 1px solid #e5e7eb;
+        }
+        
+        .card-header {
+            padding: 1.5rem 1.5rem 0.75rem 1.5rem;
+        }
+        
+        .card-content {
+            padding: 1.5rem;
+        }
+        
+        .ring-2 {
+            box-shadow: 0 0 0 2px #3b82f6;
+        }
+    </style>
+</head>
+<body>
+    <div id="root"></div>
+    
+    <script type="text/babel">
+        const { useState, useEffect } = React;
+        const { RefreshCw, Zap, AlertCircle, CheckCircle, XCircle, Send, Power } = lucide;
+
+        const RaftVisualDashboard = () => {
+          const [nodes, setNodes] = useState([
+            { id: 'node1', port: 8001, state: 'follower', term: 0, leader: null, status: 'healthy', logs: 0 },
+            { id: 'node2', port: 8002, state: 'follower', term: 0, leader: null, status: 'healthy', logs: 0 },
+            { id: 'node3', port: 8003, state: 'follower', term: 0, leader: null, status: 'healthy', logs: 0 }
+          ]);
+          
+          const [operations, setOperations] = useState([]);
+          const [demoState, setDemoState] = useState('idle');
+          const [currentDemo, setCurrentDemo] = useState(null);
+          const [kvData, setKvData] = useState({});
+
+          // Fetch cluster status
+          const fetchClusterStatus = async () => {
+            try {
+              const promises = nodes.map(async (node) => {
+                try {
+                  const response = await fetch(`http://localhost:${node.port}/raft/status`);
+                  if (response.ok) {
+                    const data = await response.json();
+                    return {
+                      ...node,
+                      state: data.state,
+                      term: data.current_term,
+                      leader: data.current_leader,
+                      logs: data.log_length,
+                      commitIndex: data.commit_index,
+                      status: 'healthy'
+                    };
+                  }
+                } catch (error) {
+                  return { ...node, status: 'offline' };
+                }
+              });
+              
+              const updatedNodes = await Promise.all(promises);
+              setNodes(updatedNodes);
+            } catch (error) {
+              console.error('Error fetching cluster status:', error);
+            }
+          };
+
+          // Auto-refresh status
+          useEffect(() => {
+            fetchClusterStatus();
+            const interval = setInterval(fetchClusterStatus, 1000);
+            return () => clearInterval(interval);
+          }, []);
+
+          // Demo scenarios
+          const demos = [
+            {
+              id: 'leader-election',
+              name: 'Leader Election',
+              description: 'Watch how nodes elect a leader when starting up',
+              steps: [
+                { action: 'Starting cluster...', delay: 1000 },
+                { action: 'Nodes exchanging votes...', delay: 2000 },
+                { action: 'Leader elected!', delay: 1000 }
+              ]
+            },
+            {
+              id: 'data-replication',
+              name: 'Data Replication',
+              description: 'See how data is replicated across all nodes',
+              steps: [
+                { action: 'Writing data to leader...', delay: 1000 },
+                { action: 'Replicating to followers...', delay: 1500 },
+                { action: 'Data committed on majority!', delay: 1000 }
+              ]
+            },
+            {
+              id: 'leader-failure',
+              name: 'Leader Failure',
+              description: 'Simulate leader failure and watch re-election',
+              steps: [
+                { action: 'Stopping current leader...', delay: 1000 },
+                { action: 'Followers detect leader failure...', delay: 2000 },
+                { action: 'New election started...', delay: 1500 },
+                { action: 'New leader elected!', delay: 1000 }
+              ]
+            }
+          ];
+
+          const runDemo = async (demo) => {
+            setDemoState('running');
+            setCurrentDemo(demo.id);
+            setOperations([]);
+            
+            for (const step of demo.steps) {
+              setOperations(prev => [...prev, { text: step.action, timestamp: new Date() }]);
+              await new Promise(resolve => setTimeout(resolve, step.delay));
+            }
+            
+            setDemoState('completed');
+            setTimeout(() => {
+              setDemoState('idle');
+              setCurrentDemo(null);
+            }, 2000);
+          };
+
+          const writeData = async () => {
+            const leaderNode = nodes.find(n => n.state === 'leader');
+            if (!leaderNode) {
+              alert('No leader elected yet!');
+              return;
+            }
+            
+            const key = `key-${Date.now()}`;
+            const value = { data: `value-${Math.random()}`, timestamp: new Date() };
+            
+            try {
+              const response = await fetch(`http://localhost:${leaderNode.port}/kv/${key}`, {
+                method: 'PUT',
+                headers: { 'Content-Type': 'application/json' },
+                body: JSON.stringify({ value })
+              });
+              
+              if (response.ok) {
+                setOperations(prev => [...prev, { 
+                  text: `Wrote ${key} to leader ${leaderNode.id}`, 
+                  timestamp: new Date() 
+                }]);
+                setKvData(prev => ({ ...prev, [key]: value }));
+              }
+            } catch (error) {
+              console.error('Write failed:', error);
+            }
+          };
+
+          const getNodeColor = (node) => {
+            if (node.status === 'offline') return 'bg-gray-100 border-gray-300';
+            if (node.state === 'leader') return 'bg-green-50 border-green-500';
+            if (node.state === 'candidate') return 'bg-yellow-50 border-yellow-500';
+            return 'bg-blue-50 border-blue-300';
+          };
+
+          const getStateIcon = (state) => {
+            if (state === 'leader') return React.createElement(Zap, { className: "w-5 h-5 text-green-600" });
+            if (state === 'candidate') return React.createElement(AlertCircle, { className: "w-5 h-5 text-yellow-600" });
+            return React.createElement(CheckCircle, { className: "w-5 h-5 text-blue-600" });
+          };
+
+          return (
+            <div className="p-6 max-w-7xl mx-auto space-y-6">
+              <div className="text-center mb-8">
+                <h1 className="text-4xl font-bold mb-2">Raft Consensus Visualization</h1>
+                <p className="text-gray-600">Interactive demonstration of distributed consensus</p>
+              </div>
+
+              {/* Cluster Status */}
+              <div className="grid grid-cols-3 gap-4">
+                {nodes.map(node => (
+                  <div key={node.id} className={`card ${getNodeColor(node)} border-2 transition-all duration-300`}>
+                    <div className="card-header">
+                      <div className="flex items-center justify-between">
+                        <span className="flex items-center gap-2">
+                          {getStateIcon(node.state)}
+                          {node.id}
+                        </span>
+                        <span className={`badge ${node.status === 'healthy' ? 'badge-success' : 'badge-secondary'}`}>
+                          {node.status}
+                        </span>
+                      </div>
+                    </div>
+                    <div className="card-content">
+                      <div className="space-y-2 text-sm">
+                        <div className="flex justify-between">
+                          <span className="font-medium">State:</span>
+                          <span className="capitalize">{node.state}</span>
+                        </div>
+                        <div className="flex justify-between">
+                          <span className="font-medium">Term:</span>
+                          <span>{node.term}</span>
+                        </div>
+                        <div className="flex justify-between">
+                          <span className="font-medium">Logs:</span>
+                          <span>{node.logs}</span>
+                        </div>
+                        {node.leader && (
+                          <div className="flex justify-between">
+                            <span className="font-medium">Leader:</span>
+                            <span>{node.leader}</span>
+                          </div>
+                        )}
+                      </div>
+                    </div>
+                  </div>
+                ))}
+              </div>
+
+              {/* Demo Scenarios */}
+              <div className="card">
+                <div className="card-header">
+                  <h2 className="text-xl font-bold">Demo Scenarios</h2>
+                </div>
+                <div className="card-content">
+                  <div className="grid grid-cols-2 md:grid-cols-3 gap-3">
+                    {demos.map(demo => (
+                      <button
+                        key={demo.id}
+                        className={`btn btn-outline ${currentDemo === demo.id ? 'ring-2' : ''}`}
+                        onClick={() => runDemo(demo)}
+                        disabled={demoState === 'running'}
+                      >
+                        {demo.name}
+                      </button>
+                    ))}
+                  </div>
+                  
+                  {currentDemo && (
+                    <div className="alert mt-4">
+                      {demos.find(d => d.id === currentDemo)?.description}
+                    </div>
+                  )}
+                </div>
+              </div>
+
+              {/* Actions */}
+              <div className="card">
+                <div className="card-header">
+                  <h2 className="text-xl font-bold">Actions</h2>
+                </div>
+                <div className="card-content">
+                  <div className="flex gap-3">
+                    <button onClick={writeData} className="btn btn-primary flex items-center gap-2">
+                      {React.createElement(Send, { className: "w-4 h-4" })}
+                      Write Data
+                    </button>
+                    <button onClick={fetchClusterStatus} className="btn btn-outline flex items-center gap-2">
+                      {React.createElement(RefreshCw, { className: "w-4 h-4" })}
+                      Refresh Status
+                    </button>
+                  </div>
+                </div>
+              </div>
+
+              {/* Operations Log */}
+              <div className="card max-h-64 overflow-hidden">
+                <div className="card-header">
+                  <h2 className="text-xl font-bold">Operations Log</h2>
+                </div>
+                <div className="card-content">
+                  <div className="space-y-1 overflow-y-auto max-h-40">
+                    {operations.length === 0 ? (
+                      <p className="text-gray-500 text-sm">No operations yet...</p>
+                    ) : (
+                      operations.slice(-10).reverse().map((op, idx) => (
+                        <div key={idx} className="text-sm flex justify-between">
+                          <span>{op.text}</span>
+                          <span className="text-gray-400">
+                            {op.timestamp.toLocaleTimeString()}
+                          </span>
+                        </div>
+                      ))
+                    )}
+                  </div>
+                </div>
+              </div>
+            </div>
+          );
+        };
+
+        ReactDOM.render(<RaftVisualDashboard />, document.getElementById('root'));
+    </script>
+</body>
+</html> 

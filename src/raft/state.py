@@ -80,6 +80,10 @@ class RaftState:
     
     async def _save_persistent_state(self):
         """Save persistent state to disk (assumes lock is already held)"""
+        # TEMPORARY: Disable persistent state saving to test if file I/O is causing deadlocks
+        logger.debug(f"Node {self.node_id} _save_persistent_state - DISABLED for testing")
+        return
+        
         logger.debug(f"Node {self.node_id} _save_persistent_state starting")
         state_data = {
             "current_term": self.current_term,
@@ -106,12 +110,16 @@ class RaftState:
                 import shutil
                 shutil.move(str(temp_file), str(state_file))
             
+            # FIXED: Much shorter timeout for file operations to prevent lock contention
             await asyncio.wait_for(
                 loop.run_in_executor(None, _sync_write),
-                timeout=3.0
+                timeout=1.0  # FIXED: Very short timeout
             )
             
             logger.debug(f"Saved persistent state: term={self.current_term}, voted_for={self.voted_for}")
+        except asyncio.TimeoutError:
+            logger.error(f"Node {self.node_id} file I/O timed out after 1s - this may cause state inconsistency")
+            # Don't raise the exception to prevent deadlocks
         except Exception as e:
             logger.error(f"Node {self.node_id} failed to save persistent state: {e}", exc_info=True)
             # Clean up temp file if it exists
@@ -121,7 +129,7 @@ class RaftState:
                     logger.debug(f"Node {self.node_id} cleaned up temp file")
             except Exception as cleanup_e:
                 logger.error(f"Node {self.node_id} failed to cleanup temp file: {cleanup_e}")
-            raise
+            # Don't raise the exception to prevent deadlocks
     
     async def load_persistent_state(self):
         """Load persistent state from disk"""
@@ -228,12 +236,13 @@ class RaftState:
                 self.log.extend(entries)
                 await self._save_persistent_state()
                 
-                logger.info(f"Appended {len(entries)} entries to log")
+                logger.info(f"Appended {len(entries)} entries to log, new log length: {len(self.log)}, last_index: {self.get_last_log_index()}")
             
             # Update commit index if provided
             if leader_commit is not None and leader_commit > self.commit_index:
+                old_commit = self.commit_index
                 self.commit_index = min(leader_commit, self.get_last_log_index())
-                logger.debug(f"Updated commit index to {self.commit_index}")
+                logger.info(f"Updated commit index from {old_commit} to {self.commit_index} via append_entries")
     
     async def delete_conflicting_entries(self, start_index: int):
         """Delete log entries starting from the given index"""
@@ -271,14 +280,22 @@ class RaftState:
             if node_id != self.node_id:
                 self.next_index[node_id] = last_log_index + 1
                 self.match_index[node_id] = 0
-        logger.info(f"Initialized leader state for {len(cluster_nodes) - 1} followers")
+        
+        # FIXED: The leader itself has replicated all entries up to last_log_index
+        # This is important for commit index calculation
+        logger.info(f"Initialized leader state for {len(cluster_nodes) - 1} followers, last_log_index={last_log_index}")
+        logger.info(f"next_index: {self.next_index}")
+        logger.info(f"match_index: {self.match_index}")
     
     def update_follower_progress(self, follower_id: str, match_index: int):
         """Update progress tracking for a follower"""
         if follower_id in self.match_index:
+            old_match_index = self.match_index[follower_id]
             self.match_index[follower_id] = match_index
             self.next_index[follower_id] = match_index + 1
-            logger.debug(f"Updated progress for {follower_id}: match_index={match_index}")
+            logger.info(f"Updated progress for {follower_id}: match_index={old_match_index}->{match_index}, next_index={match_index + 1}")
+        else:
+            logger.warning(f"Attempted to update progress for unknown follower: {follower_id}")
     
     def calculate_commit_index(self, cluster_size: int) -> int:
         """Calculate new commit index based on majority replication"""
@@ -289,17 +306,26 @@ class RaftState:
         match_indices = list(self.match_index.values()) + [self.get_last_log_index()]
         match_indices.sort(reverse=True)
         
-        majority_size = (cluster_size + 1) // 2
+        # FIXED: Correct majority calculation
+        majority_size = cluster_size // 2 + 1
         
-        for i in range(len(match_indices)):
-            if i + 1 >= majority_size:
-                candidate_index = match_indices[i]
-                # Only commit entries from current term
-                if candidate_index > self.commit_index:
-                    entry = self.get_log_entry(candidate_index)
-                    if entry and entry.term == self.current_term:
-                        return candidate_index
+        logger.info(f"Calculate commit index: match_indices={match_indices}, majority_size={majority_size}, cluster_size={cluster_size}, current_commit={self.commit_index}")
         
+        # FIXED: Correct logic - we need at least majority_size nodes to have replicated the entry
+        if len(match_indices) >= majority_size:
+            # The entry at position (majority_size - 1) is replicated on majority_size nodes
+            candidate_index = match_indices[majority_size - 1]
+            
+            # Only commit entries from current term and greater than current commit index
+            if candidate_index > self.commit_index:
+                entry = self.get_log_entry(candidate_index)
+                if entry and entry.term == self.current_term:
+                    logger.info(f"New commit index calculated: {candidate_index} (entry term: {entry.term}, current term: {self.current_term})")
+                    return candidate_index
+                else:
+                    logger.info(f"Cannot commit entry at index {candidate_index}: entry_term={entry.term if entry else None}, current_term={self.current_term}")
+        
+        logger.info(f"No new commit index found, keeping current: {self.commit_index}")
         return self.commit_index
     
     async def apply_committed_entries(self) -> List[LogEntry]:

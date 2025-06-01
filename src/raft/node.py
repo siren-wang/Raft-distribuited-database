@@ -36,8 +36,8 @@ class RaftNode:
                  node_id: str,
                  cluster_config: Dict[str, str],
                  state_dir: str = "./raft_state",
-                 election_timeout_range: Tuple[float, float] = (3.0, 6.0),  # FIXED: Wider timeout range
-                 heartbeat_interval: float = 1.0):  # FIXED: Slower heartbeat for stability
+                 election_timeout_range: Tuple[float, float] = (150, 300),  # FIXED: Much wider range (milliseconds)
+                 heartbeat_interval: float = 50):  # FIXED: Faster heartbeat (milliseconds)
         """
         Initialize Raft node
         
@@ -45,8 +45,8 @@ class RaftNode:
             node_id: Unique identifier for this node
             cluster_config: Dict mapping node_id to address (host:port)
             state_dir: Directory for persistent state storage
-            election_timeout_range: Min and max election timeout in seconds
-            heartbeat_interval: Interval for leader heartbeats in seconds
+            election_timeout_range: Min and max election timeout in milliseconds
+            heartbeat_interval: Interval for leader heartbeats in milliseconds
         """
         self.node_id = node_id
         self.cluster_config = cluster_config
@@ -60,9 +60,9 @@ class RaftNode:
         self.rpc_handler = RaftRPCHandler(self)
         self.batched_append = BatchedAppendEntries(self.rpc_client)
         
-        # Timing configuration
-        self.election_timeout_range = election_timeout_range
-        self.heartbeat_interval = heartbeat_interval
+        # Timing configuration - convert milliseconds to seconds
+        self.election_timeout_range = (election_timeout_range[0] / 1000, election_timeout_range[1] / 1000)
+        self.heartbeat_interval = heartbeat_interval / 1000
         
         # Runtime state
         self.current_leader: Optional[str] = None
@@ -77,10 +77,10 @@ class RaftNode:
         self._shutdown_event = asyncio.Event()
         
         # FIXED: Add randomized startup delay to prevent simultaneous elections
-        self._startup_delay = random.uniform(0.5, 2.0)
+        self._startup_delay = random.uniform(0.5, 3.0)
         
         logger.info(f"Initialized RaftNode {node_id} with {len(cluster_config)} nodes in cluster")
-        logger.info(f"Election timeout range: {election_timeout_range}, Heartbeat interval: {heartbeat_interval}")
+        logger.info(f"Election timeout range: {self.election_timeout_range}, Heartbeat interval: {self.heartbeat_interval}")
         logger.info(f"Startup delay: {self._startup_delay:.2f}s")
     
     async def start(self):
@@ -198,14 +198,14 @@ class RaftNode:
             self.election_timer_task.cancel()
         
         if self.running and self.state.state != RaftNodeState.LEADER.value:
-            # FIXED: Better randomization with node-specific offset
+            # FIXED: Use node-specific randomization to prevent split votes
             base_timeout = random.uniform(*self.election_timeout_range)
-            # Add a small node-specific offset to reduce simultaneous elections
-            node_offset = hash(self.node_id) % 1000 / 1000.0  # 0-1 second offset
+            # Add a node-specific offset to spread out elections even more
+            node_offset = hash(self.node_id) % 50 / 1000  # 0-50ms offset based on node ID
             timeout = base_timeout + node_offset
             
+            logger.debug(f"Setting election timeout for {self.node_id}: {timeout:.3f}s")
             self.election_timer_task = asyncio.create_task(self._election_timeout(timeout))
-            logger.debug(f"Reset election timer with timeout {timeout:.3f}s (base: {base_timeout:.3f}s, offset: {node_offset:.3f}s)")
     
     async def _election_timeout(self, timeout: float):
         """Handle election timeout"""
@@ -355,11 +355,12 @@ class RaftNode:
         if heartbeat_tasks:
             await asyncio.gather(*heartbeat_tasks, return_exceptions=True)
         
-        # Update commit index based on replication
+        # FIXED: Always update commit index after heartbeats - more aggressive approach
         new_commit_index = self.state.calculate_commit_index(len(self.cluster_nodes))
         if new_commit_index > self.state.commit_index:
+            old_commit = self.state.commit_index
             self.state.commit_index = new_commit_index
-            logger.debug(f"Updated commit index to {new_commit_index}")
+            logger.info(f"Updated commit index from {old_commit} to {new_commit_index} after heartbeat round")
             asyncio.create_task(self.apply_committed_entries())
     
     async def _send_append_entries(self, follower_id: str):
@@ -375,6 +376,15 @@ class RaftNode:
         success = await self.batched_append.send_append_entries(
             follower_id, self.state, entries_to_send
         )
+        
+        # FIXED: Immediately check for commit index updates after successful replication
+        if success:
+            new_commit_index = self.state.calculate_commit_index(len(self.cluster_nodes))
+            if new_commit_index > self.state.commit_index:
+                old_commit = self.state.commit_index
+                self.state.commit_index = new_commit_index
+                logger.info(f"Updated commit index from {old_commit} to {new_commit_index} after successful replication to {follower_id}")
+                asyncio.create_task(self.apply_committed_entries())
         
         if not success and not entries_to_send:
             # Send heartbeat if no entries and batching failed
@@ -393,9 +403,27 @@ class RaftNode:
                 prev_log_term
             )
             
-            if response and response.term > self.state.current_term:
-                await self.state.update_term(response.term)
-                self.transition_to_follower()
+            if response:
+                if response.success:
+                    # Update follower progress with match_index from response
+                    if response.match_index is not None:
+                        self.state.update_follower_progress(follower_id, response.match_index)
+                        logger.info(f"Updated match_index for {follower_id} to {response.match_index} from heartbeat")
+                        
+                        # FIXED: Check commit index after heartbeat success too
+                        new_commit_index = self.state.calculate_commit_index(len(self.cluster_nodes))
+                        if new_commit_index > self.state.commit_index:
+                            old_commit = self.state.commit_index
+                            self.state.commit_index = new_commit_index
+                            logger.info(f"Updated commit index from {old_commit} to {new_commit_index} after heartbeat to {follower_id}")
+                            asyncio.create_task(self.apply_committed_entries())
+                elif response.term > self.state.current_term:
+                    # We're no longer leader
+                    await self.state.update_term(response.term)
+                    self.transition_to_follower()
+                else:
+                    # Heartbeat failed - might need to decrement nextIndex
+                    logger.info(f"Heartbeat to {follower_id} failed")
     
     async def _append_noop_entry(self):
         """Append a no-op entry when becoming leader"""
@@ -477,10 +505,11 @@ class RaftNode:
         # Append to local log
         await self.state.append_entries([entry])
         
-        logger.info(f"Leader appended command to log at index {entry.index}")
+        logger.info(f"Leader appended command to log at index {entry.index}, current commit_index={self.state.commit_index}")
+        logger.info(f"Current match_index state: {self.state.match_index}")
         
-        # Trigger replication
-        asyncio.create_task(self._send_heartbeats())
+        # Trigger immediate replication to all followers
+        await self._send_heartbeats()
         
         return True
     
@@ -490,6 +519,10 @@ class RaftNode:
     
     def get_leader_id(self) -> Optional[str]:
         """Get the ID of the current leader"""
+        # If we are the leader, always return our own ID
+        if self.state.state == RaftNodeState.LEADER.value:
+            return self.node_id
+        # Otherwise return who we think is the leader
         return self.current_leader
     
     def set_apply_command_callback(self, callback: Callable):

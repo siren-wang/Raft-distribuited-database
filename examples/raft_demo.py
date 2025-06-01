@@ -24,7 +24,7 @@ class RaftClient:
     def __init__(self, nodes: Dict[str, str]):
         self.nodes = nodes
         self.current_leader = None
-        self.client = httpx.AsyncClient(timeout=5.0)
+        self.client = httpx.AsyncClient(timeout=10.0)  # Increased timeout
     
     async def close(self):
         await self.client.aclose()
@@ -66,15 +66,28 @@ class RaftClient:
             raise Exception("No leader found")
         
         url = f"{self.nodes[self.current_leader]}/kv/{key}"
-        response = await self.client.put(url, json=value)
         
-        if response.status_code == 421:  # Misdirected request
-            # Leader changed, retry
-            self.current_leader = None
-            return await self.put(key, value)
-        
-        response.raise_for_status()
-        return response.json()
+        try:
+            # Send the value in the correct format expected by the Raft server
+            response = await self.client.put(url, json={"value": value})
+            
+            if response.status_code == 421:  # Misdirected request
+                # Leader changed, retry once
+                self.current_leader = None
+                await self.find_leader()
+                if self.current_leader:
+                    url = f"{self.nodes[self.current_leader]}/kv/{key}"
+                    response = await self.client.put(url, json={"value": value})
+                else:
+                    raise Exception("No leader found after retry")
+            
+            response.raise_for_status()
+            return response.json()
+            
+        except httpx.ReadTimeout:
+            raise Exception("Write operation timed out - this indicates log replication issues in the Raft cluster")
+        except httpx.ConnectError:
+            raise Exception(f"Could not connect to leader {self.current_leader}")
     
     async def get(self, key: str) -> Dict[str, Any]:
         """Get a value from the distributed store"""
@@ -85,15 +98,27 @@ class RaftClient:
             raise Exception("No leader found")
         
         url = f"{self.nodes[self.current_leader]}/kv/{key}"
-        response = await self.client.get(url)
         
-        if response.status_code == 421:  # Misdirected request
-            # Leader changed, retry
-            self.current_leader = None
-            return await self.get(key)
-        
-        response.raise_for_status()
-        return response.json()
+        try:
+            response = await self.client.get(url)
+            
+            if response.status_code == 421:  # Misdirected request
+                # Leader changed, retry once
+                self.current_leader = None
+                await self.find_leader()
+                if self.current_leader:
+                    url = f"{self.nodes[self.current_leader]}/kv/{key}"
+                    response = await self.client.get(url)
+                else:
+                    raise Exception("No leader found after retry")
+            
+            response.raise_for_status()
+            return response.json()
+            
+        except httpx.ReadTimeout:
+            raise Exception("Read operation timed out")
+        except httpx.ConnectError:
+            raise Exception(f"Could not connect to leader {self.current_leader}")
     
     async def delete(self, key: str) -> Optional[Dict[str, Any]]:
         """Delete a key from the distributed store"""
@@ -104,15 +129,27 @@ class RaftClient:
             raise Exception("No leader found")
         
         url = f"{self.nodes[self.current_leader]}/kv/{key}"
-        response = await self.client.delete(url)
         
-        if response.status_code == 421:  # Misdirected request
-            # Leader changed, retry
-            self.current_leader = None
-            return await self.delete(key)
-        
-        response.raise_for_status()
-        return response.json() if response.status_code == 200 else None
+        try:
+            response = await self.client.delete(url)
+            
+            if response.status_code == 421:  # Misdirected request
+                # Leader changed, retry once
+                self.current_leader = None
+                await self.find_leader()
+                if self.current_leader:
+                    url = f"{self.nodes[self.current_leader]}/kv/{key}"
+                    response = await self.client.delete(url)
+                else:
+                    raise Exception("No leader found after retry")
+            
+            response.raise_for_status()
+            return response.json() if response.status_code == 200 else None
+            
+        except httpx.ReadTimeout:
+            raise Exception("Delete operation timed out")
+        except httpx.ConnectError:
+            raise Exception(f"Could not connect to leader {self.current_leader}")
 
 
 async def demo_basic_operations():
@@ -153,15 +190,28 @@ async def demo_basic_operations():
             "user:charlie": {"name": "Charlie", "age": 35, "city": "Seattle"}
         }
         
+        successful_writes = 0
         for key, value in data.items():
-            result = await client.put(key, value)
-            print(f"   PUT {key} -> version {result['version']}")
+            try:
+                result = await client.put(key, value)
+                print(f"   PUT {key} -> version {result['version']}")
+                successful_writes += 1
+            except Exception as e:
+                print(f"   PUT {key} -> FAILED: {e}")
+        
+        if successful_writes == 0:
+            print("   ✗ No writes succeeded - this indicates log replication issues")
+            print("   The cluster has leader election working but data commitment is failing")
+            return
         
         # Read data back
         print("\n4. Reading data from the cluster:")
         for key in data.keys():
-            result = await client.get(key)
-            print(f"   GET {key} -> {result['value']}")
+            try:
+                result = await client.get(key)
+                print(f"   GET {key} -> {result['value']}")
+            except Exception as e:
+                print(f"   GET {key} -> FAILED: {e}")
         
         # Show replication status
         print("\n5. Checking replication:")
@@ -176,6 +226,7 @@ async def demo_basic_operations():
             print(f"   ✓ All nodes have same commit index: {list(commit_indices.values())[0]}")
         else:
             print(f"   ✗ Commit indices differ: {commit_indices}")
+            print("   This indicates log replication issues between nodes")
         
     finally:
         await client.close()

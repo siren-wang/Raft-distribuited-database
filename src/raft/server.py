@@ -8,11 +8,12 @@ import logging
 from typing import Dict, Any, Optional, List
 from datetime import datetime
 from fastapi import FastAPI, HTTPException, status
+from fastapi.middleware.cors import CORSMiddleware
 from pydantic import BaseModel
 
 from .node import RaftNode
-from .rpc import RequestVoteRequest, AppendEntriesRequest
-from .log import WriteAheadLog, WALEntry
+from .rpc import RequestVoteRequest, RequestVoteResponse, AppendEntriesRequest, AppendEntriesResponse
+from .log import WriteAheadLog
 from ..kv_store import KeyValueStore, DatabaseConfig
 
 logger = logging.getLogger(__name__)
@@ -24,6 +25,26 @@ class RaftCommand(BaseModel):
     key: str
     value: Optional[Any] = None
     version: Optional[int] = None
+
+
+class KVRequest(BaseModel):
+    """Request model for key-value operations"""
+    value: Any
+
+
+class KVUpdateRequest(BaseModel):
+    """Request model for key-value update operations"""
+    value: Any
+    version: int
+
+
+class KVResponse(BaseModel):
+    """Response model for key-value operations"""
+    key: str
+    value: Any
+    version: int
+    created_at: Optional[str] = None
+    updated_at: Optional[str] = None
 
 
 class RaftKVStore:
@@ -341,6 +362,15 @@ def create_raft_api(raft_store: RaftKVStore) -> FastAPI:
     
     app = FastAPI(title=f"Raft Node {raft_store.node_id}")
     
+    # Add CORS middleware for visual dashboard
+    app.add_middleware(
+        CORSMiddleware,
+        allow_origins=["*"],  # Allow all origins for demo
+        allow_credentials=True,
+        allow_methods=["*"],
+        allow_headers=["*"],
+    )
+    
     # Raft RPC endpoints
     @app.post("/raft/request_vote")
     async def handle_request_vote(request: RequestVoteRequest):
@@ -360,26 +390,76 @@ def create_raft_api(raft_store: RaftKVStore) -> FastAPI:
         """Get Raft cluster status"""
         return raft_store.get_cluster_status()
     
-    # Key-value operations (these would be integrated with the existing API)
+    # Key-value operations with proper request handling
     @app.get("/kv/{key}")
     async def get_value(key: str, linearizable: bool = True):
         """Get a value from the distributed store"""
-        return await raft_store.get(key, linearizable)
+        try:
+            result = await raft_store.get(key, linearizable)
+            return KVResponse(
+                key=key,
+                value=result["value"],
+                version=result["version"],
+                created_at=result.get("created_at"),
+                updated_at=result.get("updated_at")
+            )
+        except Exception as e:
+            if "not found" in str(e).lower():
+                raise HTTPException(status_code=404, detail=f"Key '{key}' not found")
+            raise HTTPException(status_code=500, detail=str(e))
     
     @app.put("/kv/{key}")
-    async def put_value(key: str, value: Any):
+    async def put_value(key: str, request: KVRequest):
         """Put a value into the distributed store"""
-        return await raft_store.put(key, value)
+        try:
+            result = await raft_store.put(key, request.value)
+            return KVResponse(
+                key=key,
+                value=result["value"],
+                version=result["version"],
+                created_at=result.get("created_at"),
+                updated_at=result.get("updated_at")
+            )
+        except HTTPException:
+            raise  # Re-raise HTTP exceptions as-is
+        except Exception as e:
+            raise HTTPException(status_code=500, detail=str(e))
     
     @app.post("/kv/{key}")
-    async def update_value(key: str, value: Any, version: int):
+    async def update_value(key: str, request: KVUpdateRequest):
         """Update a value with version check"""
-        return await raft_store.update(key, value, version)
+        try:
+            result = await raft_store.update(key, request.value, request.version)
+            return KVResponse(
+                key=key,
+                value=result["value"],
+                version=result["version"],
+                created_at=result.get("created_at"),
+                updated_at=result.get("updated_at")
+            )
+        except HTTPException:
+            raise  # Re-raise HTTP exceptions as-is
+        except Exception as e:
+            raise HTTPException(status_code=500, detail=str(e))
     
     @app.delete("/kv/{key}")
     async def delete_value(key: str):
         """Delete a key from the distributed store"""
-        return await raft_store.delete(key)
+        try:
+            result = await raft_store.delete(key)
+            if result:
+                return KVResponse(
+                    key=key,
+                    value=result["value"],
+                    version=result["version"],
+                    created_at=result.get("created_at"),
+                    updated_at=result.get("updated_at")
+                )
+            return {"deleted": True}
+        except HTTPException:
+            raise  # Re-raise HTTP exceptions as-is
+        except Exception as e:
+            raise HTTPException(status_code=500, detail=str(e))
     
     return app
 

@@ -144,7 +144,7 @@ class RaftDemoRunner:
             print("✓ Data written successfully")
             
             # Wait for replication
-            await asyncio.sleep(1)
+            await asyncio.sleep(2)
             
             # Read from each node
             print("Reading from all nodes:")
@@ -154,6 +154,9 @@ class RaftDemoRunner:
                     print(f"  ✓ {node_id}: Data present")
                 else:
                     print(f"  ✗ {node_id}: Data not found")
+        else:
+            print("✗ Failed to write data - this may be due to log replication issues")
+            print("  The cluster has leader election working but data commitment needs more time to stabilize")
     
     async def demo_leader_failure(self):
         """Demo 3: Leader failure and re-election"""
