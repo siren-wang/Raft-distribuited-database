@@ -276,14 +276,21 @@ class RaftState:
     def initialize_leader_state(self, cluster_nodes: List[str]):
         """Initialize state when becoming leader"""
         last_log_index = self.get_last_log_index()
+        
+        # Clear old state
+        self.next_index.clear()
+        self.match_index.clear()
+        
         for node_id in cluster_nodes:
             if node_id != self.node_id:
                 self.next_index[node_id] = last_log_index + 1
                 self.match_index[node_id] = 0
         
-        # FIXED: The leader itself has replicated all entries up to last_log_index
-        # This is important for commit index calculation
-        logger.info(f"Initialized leader state for {len(cluster_nodes) - 1} followers, last_log_index={last_log_index}")
+        # FIX: Include self in match_index for commit calculation
+        # The leader has already replicated all its own entries
+        self.match_index[self.node_id] = last_log_index
+        
+        logger.info(f"Initialized leader state: last_log_index={last_log_index}")
         logger.info(f"next_index: {self.next_index}")
         logger.info(f"match_index: {self.match_index}")
     
@@ -302,30 +309,44 @@ class RaftState:
         if self.state != "leader":
             return self.commit_index
         
-        # Find the highest index replicated on majority of servers
-        match_indices = list(self.match_index.values()) + [self.get_last_log_index()]
-        match_indices.sort(reverse=True)
+        # FIX: Include leader's own progress
+        # Get all match indices including the leader itself
+        all_match_indices = []
         
-        # FIXED: Correct majority calculation
-        majority_size = cluster_size // 2 + 1
+        # Add follower match indices
+        for follower_id, match_index in self.match_index.items():
+            if follower_id != self.node_id:  # Skip self if in match_index
+                all_match_indices.append(match_index)
         
-        logger.info(f"Calculate commit index: match_indices={match_indices}, majority_size={majority_size}, cluster_size={cluster_size}, current_commit={self.commit_index}")
+        # Add leader's own last log index
+        all_match_indices.append(self.get_last_log_index())
         
-        # FIXED: Correct logic - we need at least majority_size nodes to have replicated the entry
-        if len(match_indices) >= majority_size:
-            # The entry at position (majority_size - 1) is replicated on majority_size nodes
-            candidate_index = match_indices[majority_size - 1]
+        # Sort in descending order
+        all_match_indices.sort(reverse=True)
+        
+        majority_size = (cluster_size + 1) // 2
+        
+        logger.info(f"Calculating commit index: all_indices={all_match_indices}, "
+                f"majority_size={majority_size}, current_commit={self.commit_index}")
+        
+        # Find the highest index that has been replicated on a majority
+        for index in all_match_indices:
+            if index <= self.commit_index:
+                break  # No point checking lower indices
             
-            # Only commit entries from current term and greater than current commit index
-            if candidate_index > self.commit_index:
-                entry = self.get_log_entry(candidate_index)
+            # Count how many nodes have this index
+            count = sum(1 for match_idx in all_match_indices if match_idx >= index)
+            
+            if count >= majority_size:
+                # Check if entry is from current term
+                entry = self.get_log_entry(index)
                 if entry and entry.term == self.current_term:
-                    logger.info(f"New commit index calculated: {candidate_index} (entry term: {entry.term}, current term: {self.current_term})")
-                    return candidate_index
+                    logger.info(f"New commit index: {index} (replicated on {count} nodes)")
+                    return index
                 else:
-                    logger.info(f"Cannot commit entry at index {candidate_index}: entry_term={entry.term if entry else None}, current_term={self.current_term}")
+                    logger.debug(f"Cannot commit index {index}: wrong term "
+                            f"(entry_term={entry.term if entry else None}, current_term={self.current_term})")
         
-        logger.info(f"No new commit index found, keeping current: {self.commit_index}")
         return self.commit_index
     
     async def apply_committed_entries(self) -> List[LogEntry]:

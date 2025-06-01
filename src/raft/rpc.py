@@ -234,137 +234,140 @@ class RaftRPCHandler:
     
     async def handle_append_entries(self, request: AppendEntriesRequest) -> AppendEntriesResponse:
         """Handle incoming AppendEntries RPC"""
-        # Use a non-blocking approach to avoid deadlocks
         current_term = self.node.state.current_term
         
         # Reply false if term < currentTerm
         if request.term < current_term:
             logger.debug(f"Rejecting AppendEntries from {request.leader_id}: "
-                       f"outdated term {request.term} < {current_term}")
-            return AppendEntriesResponse(term=current_term, success=False)
+                    f"outdated term {request.term} < {current_term}")
+            return AppendEntriesResponse(
+                term=current_term, 
+                success=False,
+                match_index=self.node.state.get_last_log_index()
+            )
         
-        # Update term and convert to follower if necessary - use shorter timeout
+        # Update term if necessary
         if request.term > current_term:
             try:
                 await asyncio.wait_for(
                     self.node.state.update_term(request.term),
-                    timeout=2.0  # Short timeout to avoid blocking elections
+                    timeout=2.0
                 )
-                current_term = self.node.state.current_term
             except asyncio.TimeoutError:
-                logger.warning(f"AppendEntries handler timed out updating term from {request.leader_id}")
-                return AppendEntriesResponse(term=current_term, success=False)
-            except Exception as e:
-                logger.error(f"Failed to update term in append_entries handler: {e}")
-                return AppendEntriesResponse(term=current_term, success=False)
+                logger.warning(f"AppendEntries handler timed out updating term")
+                return AppendEntriesResponse(
+                    term=current_term, 
+                    success=False,
+                    match_index=self.node.state.get_last_log_index()
+                )
         
         # Always transition to follower when receiving valid AppendEntries
         if self.node.state.state != "follower":
             self.node.transition_to_follower()
         
-        # Reset election timer
+        # Reset election timer and record leader
         self.node.reset_election_timer()
         self.node.current_leader = request.leader_id
         
-        # FIXED: Log heartbeat reception
+        # Handle heartbeat
         if not request.entries:
             logger.debug(f"Node {self.node.node_id} received heartbeat from leader {request.leader_id}")
+            # Still need to update commit index for heartbeats
+            if request.leader_commit > self.node.state.commit_index:
+                old_commit = self.node.state.commit_index
+                self.node.state.commit_index = min(
+                    request.leader_commit,
+                    self.node.state.get_last_log_index()
+                )
+                if self.node.state.commit_index > old_commit:
+                    logger.info(f"Updated commit index from {old_commit} to {self.node.state.commit_index} via heartbeat")
+                    asyncio.create_task(self.node.apply_committed_entries())
+            
+            return AppendEntriesResponse(
+                term=self.node.state.current_term,
+                success=True,
+                match_index=self.node.state.get_last_log_index()
+            )
         
-        # FIXED: Simplified log consistency check and repair
+        # FIXED: More robust log consistency check
         try:
-            # Get current log state
             last_log_index = self.node.state.get_last_log_index()
             
-            logger.debug(f"AppendEntries from {request.leader_id}: prev_log_index={request.prev_log_index}, prev_log_term={request.prev_log_term}, entries={len(request.entries)}, last_log_index={last_log_index}")
+            # FIX 1: Handle the case where prev_log_index > last_log_index
+            if request.prev_log_index > last_log_index:
+                logger.info(f"Missing entries: follower has {last_log_index}, leader expects {request.prev_log_index}")
+                return AppendEntriesResponse(
+                    term=self.node.state.current_term,
+                    success=False,
+                    match_index=last_log_index  # Tell leader what we actually have
+                )
             
-            # Check if we have the previous log entry
+            # FIX 2: Check log consistency at prev_log_index
             if request.prev_log_index > 0:
-                if request.prev_log_index > last_log_index:
-                    # We're missing entries - return our last log index for repair
-                    logger.debug(f"Missing entries: prev_log_index={request.prev_log_index}, last_log_index={last_log_index}")
+                prev_entry = self.node.state.get_log_entry(request.prev_log_index)
+                if not prev_entry:
+                    logger.warning(f"Missing entry at index {request.prev_log_index}")
+                    # Find the last entry we do have
+                    match_index = 0
+                    for i in range(request.prev_log_index - 1, 0, -1):
+                        if self.node.state.get_log_entry(i):
+                            match_index = i
+                            break
                     return AppendEntriesResponse(
-                        term=self.node.state.current_term, 
+                        term=self.node.state.current_term,
                         success=False,
-                        match_index=last_log_index
+                        match_index=match_index
                     )
                 
-                prev_entry = self.node.state.get_log_entry(request.prev_log_index)
-                if not prev_entry or prev_entry.term != request.prev_log_term:
-                    # Log inconsistency - find the highest matching index
+                if prev_entry.term != request.prev_log_term:
+                    logger.info(f"Term mismatch at index {request.prev_log_index}: "
+                            f"expected {request.prev_log_term}, got {prev_entry.term}")
+                    # FIX 3: Find the last matching entry
                     match_index = 0
-                    for i in range(min(request.prev_log_index, last_log_index), 0, -1):
+                    for i in range(request.prev_log_index - 1, 0, -1):
                         entry = self.node.state.get_log_entry(i)
                         if entry and entry.term <= request.prev_log_term:
                             match_index = i
                             break
                     
-                    logger.debug(f"Log consistency check failed at index {request.prev_log_index}, match_index={match_index}")
+                    # Delete conflicting entries
+                    await self.node.state.delete_conflicting_entries(request.prev_log_index)
+                    
                     return AppendEntriesResponse(
-                        term=self.node.state.current_term, 
+                        term=self.node.state.current_term,
                         success=False,
                         match_index=match_index
                     )
-            else:
-                logger.debug(f"AppendEntries with prev_log_index=0, proceeding to append entries")
-                # FIXED: When prev_log_index=0, we should truncate our entire log if we have entries
-                # This handles the case where a new leader has fewer entries than us
-                if last_log_index > 0:
-                    logger.info(f"Truncating entire log (had {last_log_index} entries) to match new leader")
-                    async with self.node.state._state_lock:
-                        self.node.state.log = []
-                        # Don't save persistent state since it's disabled for testing
             
-            # Process entries if any
+            # FIX 4: Process entries more carefully
             if request.entries:
-                logger.debug(f"Processing {len(request.entries)} entries")
-                # FIXED: Much longer timeout to handle large batches and persistent state saving
-                timeout_seconds = max(10.0, len(request.entries) * 0.1)  # 10s base + 100ms per entry
-                try:
-                    # FIXED: Try to acquire lock with timeout to avoid deadlocks
-                    logger.debug(f"Attempting to acquire state lock for {len(request.entries)} entries with timeout {timeout_seconds}s")
+                async with self.node.state._state_lock:
+                    # Find where to start appending
+                    start_index = request.prev_log_index + 1
+                    new_entries = []
                     
-                    # Use asyncio.wait_for with the lock acquisition
-                    async def _process_with_lock():
-                        async with self.node.state._state_lock:
-                            logger.debug(f"Acquired state lock, processing entries")
-                            # Delete conflicting entries and append new ones
-                            new_entries = []
-                            for i, entry_dict in enumerate(request.entries):
-                                entry_index = request.prev_log_index + i + 1
-                                existing_entry = self.node.state.get_log_entry(entry_index)
-                                
-                                if existing_entry and existing_entry.term != entry_dict["term"]:
-                                    # Delete this and all following entries
-                                    logger.debug(f"Deleting conflicting entries from index {entry_index}")
-                                    await self.node.state.delete_conflicting_entries(entry_index)
-                                    new_entries = request.entries[i:]
-                                    break
-                                elif not existing_entry:
-                                    new_entries = request.entries[i:]
-                                    break
-                            
-                            # Append new entries
-                            if new_entries:
-                                logger.debug(f"Appending {len(new_entries)} new entries")
-                                from .state import LogEntry
-                                entries_to_append = [LogEntry.from_dict(e) for e in new_entries]
-                                await self.node.state.append_entries(entries_to_append)
-                                logger.info(f"Appended {len(entries_to_append)} entries starting at index {request.prev_log_index + 1}")
-                            else:
-                                logger.debug(f"No new entries to append")
-                            logger.debug(f"Finished processing entries, releasing state lock")
+                    for i, entry_dict in enumerate(request.entries):
+                        entry_index = start_index + i
+                        existing_entry = self.node.state.get_log_entry(entry_index)
+                        
+                        if existing_entry:
+                            if existing_entry.term != entry_dict["term"]:
+                                # Conflict - delete this and all following entries
+                                logger.info(f"Deleting conflicting entries from index {entry_index}")
+                                await self.node.state.delete_conflicting_entries(entry_index)
+                                new_entries = request.entries[i:]
+                                break
+                        else:
+                            # No existing entry - append remaining entries
+                            new_entries = request.entries[i:]
+                            break
                     
-                    await asyncio.wait_for(_process_with_lock(), timeout=timeout_seconds)
-                    
-                except asyncio.TimeoutError:
-                    logger.error(f"AppendEntries handler timed out after {timeout_seconds}s processing {len(request.entries)} entries from {request.leader_id}")
-                    return AppendEntriesResponse(
-                        term=current_term, 
-                        success=False, 
-                        match_index=self.node.state.get_last_log_index()
-                    )
-            else:
-                logger.debug(f"No entries to process (heartbeat)")
+                    # Append new entries
+                    if new_entries:
+                        from .state import LogEntry
+                        entries_to_append = [LogEntry.from_dict(e) for e in new_entries]
+                        await self.node.state.append_entries(entries_to_append)
+                        logger.info(f"Appended {len(entries_to_append)} entries")
             
             # Update commit index
             if request.leader_commit > self.node.state.commit_index:
@@ -374,31 +377,21 @@ class RaftRPCHandler:
                     self.node.state.get_last_log_index()
                 )
                 if self.node.state.commit_index > old_commit:
-                    logger.debug(f"Updated commit index from {old_commit} to {self.node.state.commit_index}")
-                    # Trigger state machine application
+                    logger.info(f"Updated commit index from {old_commit} to {self.node.state.commit_index}")
                     asyncio.create_task(self.node.apply_committed_entries())
             
             final_match_index = self.node.state.get_last_log_index()
-            logger.debug(f"AppendEntries success, returning match_index={final_match_index}")
             return AppendEntriesResponse(
                 term=self.node.state.current_term,
                 success=True,
                 match_index=final_match_index
             )
-        
-        except asyncio.TimeoutError:
-            logger.warning(f"AppendEntries handler timed out processing {len(request.entries) if request.entries else 0} entries from {request.leader_id}")
-            # Return current state even on timeout to help leader make progress
-            return AppendEntriesResponse(
-                term=current_term, 
-                success=False, 
-                match_index=self.node.state.get_last_log_index()
-            )
+            
         except Exception as e:
             logger.error(f"Error in append_entries handler: {e}", exc_info=True)
             return AppendEntriesResponse(
-                term=current_term, 
-                success=False, 
+                term=self.node.state.current_term,
+                success=False,
                 match_index=self.node.state.get_last_log_index()
             )
 
@@ -413,25 +406,33 @@ class BatchedAppendEntries:
         
     async def send_append_entries(self, follower_id: str, state, entries_to_send: List) -> bool:
         """Send AppendEntries with batching and flow control"""
-        # Check if we already have a request in flight
         if self.in_flight.get(follower_id, False):
-            logger.info(f"BatchedAppendEntries: Request already in flight for {follower_id}")
+            logger.debug(f"Request already in flight for {follower_id}")
             return False
         
         self.in_flight[follower_id] = True
         
         try:
-            # Batch entries
-            batched_entries = entries_to_send[:self.max_batch_size]
-            
-            # Prepare request
-            prev_log_index = state.next_index[follower_id] - 1
+            # Get current indices
+            next_index = state.next_index.get(follower_id, 1)
+            prev_log_index = next_index - 1
             prev_log_term = 0
+            
             if prev_log_index > 0:
                 prev_entry = state.get_log_entry(prev_log_index)
-                prev_log_term = prev_entry.term if prev_entry else 0
+                if prev_entry:
+                    prev_log_term = prev_entry.term
+                else:
+                    # FIX: If we don't have the prev entry, we need to go back further
+                    logger.warning(f"Missing entry at prev_log_index {prev_log_index}")
+                    state.next_index[follower_id] = max(1, prev_log_index)
+                    return False
             
-            logger.info(f"BatchedAppendEntries: Sending to {follower_id}, entries={len(batched_entries)}, prev_log_index={prev_log_index}")
+            # Batch entries
+            batched_entries = entries_to_send[:self.max_batch_size] if entries_to_send else []
+            
+            logger.info(f"Sending AppendEntries to {follower_id}: "
+                    f"prev_index={prev_log_index}, entries={len(batched_entries)}")
             
             request = AppendEntriesRequest(
                 term=state.current_term,
@@ -442,39 +443,32 @@ class BatchedAppendEntries:
                 leader_commit=state.commit_index
             )
             
-            # Send request
             response = await self.rpc_client.append_entries(follower_id, request)
             
             if response:
-                logger.info(f"BatchedAppendEntries: Response from {follower_id}: success={response.success}, match_index={response.match_index}")
                 if response.success:
                     # Update follower progress
                     new_match_index = prev_log_index + len(batched_entries)
                     state.update_follower_progress(follower_id, new_match_index)
-                    logger.info(f"BatchedAppendEntries: Successfully replicated {len(batched_entries)} entries to {follower_id}, match_index={new_match_index}")
+                    logger.info(f"Successfully replicated to {follower_id}, match_index={new_match_index}")
                     return True
                 else:
-                    # Handle failure - use more aggressive backoff for faster convergence
+                    # Handle failure
                     if response.term > state.current_term:
-                        # We're no longer leader
                         await state.update_term(response.term)
                         return False
+                    
+                    # FIX: Use the match_index from response to update next_index
+                    if response.match_index is not None:
+                        # Set next_index to one past the last matching entry
+                        new_next_index = response.match_index + 1
+                        if new_next_index < state.next_index[follower_id]:
+                            state.next_index[follower_id] = new_next_index
+                            logger.info(f"Updated next_index for {follower_id} to {new_next_index} based on match_index")
                     else:
-                        # Log inconsistency - use binary search approach for faster convergence
-                        current_next = state.next_index[follower_id]
-                        if response.match_index is not None and response.match_index >= 0:
-                            # Follower told us their highest matching index
-                            state.next_index[follower_id] = response.match_index + 1
-                            logger.info(f"BatchedAppendEntries: Set nextIndex for {follower_id} to {response.match_index + 1} based on match_index")
-                        else:
-                            # Use more conservative backoff - decrement by 1 for safety
-                            if current_next > 1:
-                                new_next = current_next - 1
-                                state.next_index[follower_id] = new_next
-                                logger.info(f"BatchedAppendEntries: Conservative backoff for {follower_id}: {current_next} -> {new_next}")
-                            else:
-                                state.next_index[follower_id] = 1
-                                logger.info(f"BatchedAppendEntries: Set nextIndex for {follower_id} to 1 (minimum)")
+                        # Conservative backoff
+                        state.next_index[follower_id] = max(1, state.next_index[follower_id] - 1)
+                        logger.info(f"Decremented next_index for {follower_id} to {state.next_index[follower_id]}")
             
             return False
             

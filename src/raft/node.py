@@ -353,14 +353,19 @@ class RaftNode:
                 heartbeat_tasks.append(task)
         
         if heartbeat_tasks:
-            await asyncio.gather(*heartbeat_tasks, return_exceptions=True)
+            results = await asyncio.gather(*heartbeat_tasks, return_exceptions=True)
+            
+            # Count successful heartbeats
+            success_count = sum(1 for r in results if r is True)
+            logger.debug(f"Heartbeat round: {success_count}/{len(heartbeat_tasks)} successful")
         
-        # FIXED: Always update commit index after heartbeats - more aggressive approach
+        # Always try to update commit index after heartbeats
+        old_commit = self.state.commit_index
         new_commit_index = self.state.calculate_commit_index(len(self.cluster_nodes))
-        if new_commit_index > self.state.commit_index:
-            old_commit = self.state.commit_index
+        
+        if new_commit_index > old_commit:
             self.state.commit_index = new_commit_index
-            logger.info(f"Updated commit index from {old_commit} to {new_commit_index} after heartbeat round")
+            logger.info(f"Advanced commit index: {old_commit} -> {new_commit_index}")
             asyncio.create_task(self.apply_committed_entries())
     
     async def _send_append_entries(self, follower_id: str):

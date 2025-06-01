@@ -389,6 +389,31 @@ def create_raft_api(raft_store: RaftKVStore) -> FastAPI:
     async def get_status():
         """Get Raft cluster status"""
         return raft_store.get_cluster_status()
+    @app.get("/raft/debug")
+    async def get_debug_info():
+        """Get detailed debug information"""
+        return {
+            "node_id": raft_store.node_id,
+            "state": raft_store.raft_node.state.state,
+            "current_term": raft_store.raft_node.state.current_term,
+            "voted_for": raft_store.raft_node.state.voted_for,
+            "current_leader": raft_store.raft_node.current_leader,
+            "log_length": len(raft_store.raft_node.state.log),
+            "last_log_index": raft_store.raft_node.state.get_last_log_index(),
+            "last_log_term": raft_store.raft_node.state.get_last_log_term(),
+            "commit_index": raft_store.raft_node.state.commit_index,
+            "last_applied": raft_store.raft_node.state.last_applied,
+            "next_index": dict(raft_store.raft_node.state.next_index),
+            "match_index": dict(raft_store.raft_node.state.match_index),
+            "log_entries": [
+                {
+                    "index": entry.index,
+                    "term": entry.term,
+                    "command_type": entry.command.get("type", entry.command.get("operation", "unknown"))
+                }
+                for entry in raft_store.raft_node.state.log[-10:]  # Last 10 entries
+            ]
+        }
     
     # Key-value operations with proper request handling
     @app.get("/kv/{key}")

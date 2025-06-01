@@ -1,0 +1,336 @@
+{
+  "timestamp": "2025-05-31T21:25:46.153431",
+  "cluster_nodes": [
+    "node1",
+    "node2",
+    "node3"
+  ],
+  "test_type": "simplified_raft_benchmark",
+  "known_limitations": [
+    "Write operations timeout due to log replication issues",
+    "Commit index remains at 0 despite log entries",
+    "State update operations experience timeouts"
+  ],
+  "working_components": [
+    "Leader election mechanism",
+    "Node health monitoring",
+    "API responsiveness",
+    "Basic state consistency"
+  ],
+  "results": [
+    {
+      "test_name": "leader_election",
+      "duration": 5.203675270080566,
+      "success_rate": 1.0,
+      "additional_metrics": {
+        "successful_elections": 10,
+        "total_checks": 10,
+        "leader_checks": [
+          {
+            "leaders_found": 1,
+            "leader_id": "node1",
+            "healthy_nodes": 3
+          },
+          {
+            "leaders_found": 1,
+            "leader_id": "node1",
+            "healthy_nodes": 3
+          },
+          {
+            "leaders_found": 1,
+            "leader_id": "node1",
+            "healthy_nodes": 3
+          },
+          {
+            "leaders_found": 1,
+            "leader_id": "node1",
+            "healthy_nodes": 3
+          },
+          {
+            "leaders_found": 1,
+            "leader_id": "node1",
+            "healthy_nodes": 3
+          },
+          {
+            "leaders_found": 1,
+            "leader_id": "node1",
+            "healthy_nodes": 3
+          },
+          {
+            "leaders_found": 1,
+            "leader_id": "node1",
+            "healthy_nodes": 3
+          },
+          {
+            "leaders_found": 1,
+            "leader_id": "node1",
+            "healthy_nodes": 3
+          },
+          {
+            "leaders_found": 1,
+            "leader_id": "node1",
+            "healthy_nodes": 3
+          },
+          {
+            "leaders_found": 1,
+            "leader_id": "node1",
+            "healthy_nodes": 3
+          }
+        ]
+      }
+    },
+    {
+      "test_name": "cluster_health",
+      "duration": 4.341310977935791,
+      "success_rate": 1.0,
+      "additional_metrics": {
+        "avg_healthy_nodes": 3.0,
+        "total_nodes": 3,
+        "health_checks": 20
+      }
+    },
+    {
+      "test_name": "api_responsiveness",
+      "duration": 3.230325937271118,
+      "success_rate": 1.0,
+      "additional_metrics": {
+        "successful_requests": 30,
+        "total_requests": 30,
+        "avg_response_time_ms": 6.452608108520508,
+        "response_times": [
+          0.008729934692382812,
+          0.0048029422760009766,
+          0.004492998123168945,
+          0.0042340755462646484,
+          0.008695125579833984,
+          0.006686210632324219,
+          0.005049943923950195,
+          0.003145933151245117,
+          0.004734992980957031,
+          0.008234024047851562,
+          0.006961345672607422,
+          0.0053958892822265625,
+          0.0032100677490234375,
+          0.004194021224975586,
+          0.00766301155090332,
+          0.005860090255737305,
+          0.007426738739013672,
+          0.007087230682373047,
+          0.01407480239868164,
+          0.002774953842163086,
+          0.006470918655395508,
+          0.004354000091552734,
+          0.006700992584228516,
+          0.0076220035552978516,
+          0.00452876091003418,
+          0.008990049362182617,
+          0.0075800418853759766,
+          0.008123159408569336,
+          0.009326934814453125,
+          0.00642704963684082
+        ]
+      }
+    },
+    {
+      "test_name": "state_consistency",
+      "duration": 5.199696063995361,
+      "success_rate": 1.0,
+      "additional_metrics": {
+        "term_consistency_rate": 1.0,
+        "leader_consistency_rate": 1.0,
+        "consistency_checks": [
+          {
+            "term_consistent": true,
+            "leader_consistent": true,
+            "terms": [
+              1,
+              1,
+              1
+            ],
+            "states": [
+              "leader",
+              "candidate",
+              "candidate"
+            ],
+            "leaders": [
+              "node1",
+              null,
+              null
+            ]
+          },
+          {
+            "term_consistent": true,
+            "leader_consistent": true,
+            "terms": [
+              1,
+              1,
+              1
+            ],
+            "states": [
+              "leader",
+              "candidate",
+              "candidate"
+            ],
+            "leaders": [
+              "node1",
+              null,
+              null
+            ]
+          },
+          {
+            "term_consistent": true,
+            "leader_consistent": true,
+            "terms": [
+              1,
+              1,
+              1
+            ],
+            "states": [
+              "leader",
+              "candidate",
+              "candidate"
+            ],
+            "leaders": [
+              "node1",
+              null,
+              null
+            ]
+          },
+          {
+            "term_consistent": true,
+            "leader_consistent": true,
+            "terms": [
+              1,
+              1,
+              1
+            ],
+            "states": [
+              "leader",
+              "candidate",
+              "candidate"
+            ],
+            "leaders": [
+              "node1",
+              null,
+              null
+            ]
+          },
+          {
+            "term_consistent": true,
+            "leader_consistent": true,
+            "terms": [
+              1,
+              1,
+              1
+            ],
+            "states": [
+              "leader",
+              "candidate",
+              "candidate"
+            ],
+            "leaders": [
+              "node1",
+              null,
+              null
+            ]
+          },
+          {
+            "term_consistent": true,
+            "leader_consistent": true,
+            "terms": [
+              1,
+              1,
+              1
+            ],
+            "states": [
+              "leader",
+              "candidate",
+              "candidate"
+            ],
+            "leaders": [
+              "node1",
+              null,
+              null
+            ]
+          },
+          {
+            "term_consistent": true,
+            "leader_consistent": true,
+            "terms": [
+              1,
+              1,
+              1
+            ],
+            "states": [
+              "leader",
+              "candidate",
+              "follower"
+            ],
+            "leaders": [
+              "node1",
+              null,
+              null
+            ]
+          },
+          {
+            "term_consistent": true,
+            "leader_consistent": true,
+            "terms": [
+              1,
+              1,
+              1
+            ],
+            "states": [
+              "leader",
+              "candidate",
+              "candidate"
+            ],
+            "leaders": [
+              "node1",
+              null,
+              null
+            ]
+          },
+          {
+            "term_consistent": true,
+            "leader_consistent": true,
+            "terms": [
+              1,
+              1,
+              1
+            ],
+            "states": [
+              "leader",
+              "candidate",
+              "candidate"
+            ],
+            "leaders": [
+              "node1",
+              null,
+              null
+            ]
+          },
+          {
+            "term_consistent": true,
+            "leader_consistent": true,
+            "terms": [
+              1,
+              1,
+              1
+            ],
+            "states": [
+              "leader",
+              "candidate",
+              "candidate"
+            ],
+            "leaders": [
+              "node1",
+              null,
+              null
+            ]
+          }
+        ]
+      }
+    }
+  ]
+}
