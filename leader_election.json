@@ -1,0 +1,18 @@
+{
+  "node_id": "node3",
+  "state": "leader",
+  "current_term": 147,
+  "current_leader": "node3",
+  "log_length": 0,
+  "commit_index": 0,
+  "last_applied": 0,
+  "cluster_size": 3,
+  "wal_stats": {
+    "node_id": "node3",
+    "current_segment": 0,
+    "current_file_size": 0,
+    "total_entries": 0,
+    "segments": 1,
+    "wal_directory": "raft_wal/node3"
+  }
+}
