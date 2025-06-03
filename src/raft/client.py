@@ -40,11 +40,9 @@ class RequestIdempotencyManager:
         self._lock = asyncio.Lock()
     
     async def start(self):
-        """Start the cleanup task"""
         self._cleanup_task = asyncio.create_task(self._cleanup_loop())
     
     async def stop(self):
-        """Stop the cleanup task"""
         if self._cleanup_task:
             self._cleanup_task.cancel()
             try:
@@ -53,33 +51,27 @@ class RequestIdempotencyManager:
                 pass
     
     def generate_request_id(self, operation: str, key: str, value: Any = None) -> str:
-        """Generate a unique request ID based on operation parameters"""
         content = f"{operation}:{key}:{value}:{time.time()}"
         return hashlib.sha256(content.encode()).hexdigest()[:16]
     
     async def check_request(self, request_id: str) -> Optional[Any]:
-        """Check if a request has been processed before"""
         async with self._lock:
             if request_id in self.request_cache:
                 timestamp, result = self.request_cache[request_id]
-                # Check if still valid
                 if (datetime.utcnow() - timestamp).total_seconds() < self.ttl_seconds:
                     return result
                 else:
-                    # Expired, remove it
                     del self.request_cache[request_id]
             return None
     
     async def store_result(self, request_id: str, result: Any):
-        """Store the result of a request"""
         async with self._lock:
             self.request_cache[request_id] = (datetime.utcnow(), result)
     
     async def _cleanup_loop(self):
-        """Periodically clean up expired entries"""
         while True:
             try:
-                await asyncio.sleep(60)  # Run every minute
+                await asyncio.sleep(60) 
                 await self._cleanup_expired()
             except asyncio.CancelledError:
                 break
@@ -87,7 +79,6 @@ class RequestIdempotencyManager:
                 logger.error(f"Error in idempotency cleanup: {e}")
     
     async def _cleanup_expired(self):
-        """Remove expired entries"""
         async with self._lock:
             now = datetime.utcnow()
             expired_keys = [
@@ -154,18 +145,15 @@ class RaftClient:
         logger.info(f"Initialized RaftClient with {len(nodes)} nodes")
     
     async def start(self):
-        """Start the client"""
         self._running = True
         await self.idempotency_manager.start()
         self._health_check_task = asyncio.create_task(self._health_check_loop())
         
-        # Discover initial leader
         await self.discover_leader()
         
         logger.info("RaftClient started")
     
     async def stop(self):
-        """Stop the client"""
         self._running = False
         
         if self._health_check_task:

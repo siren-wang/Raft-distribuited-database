@@ -36,8 +36,8 @@ class RaftNode:
                  node_id: str,
                  cluster_config: Dict[str, str],
                  state_dir: str = "./raft_state",
-                 election_timeout_range: Tuple[float, float] = (150, 300),  # FIXED: Much wider range (milliseconds)
-                 heartbeat_interval: float = 50):  # FIXED: Faster heartbeat (milliseconds)
+                 election_timeout_range: Tuple[float, float] = (5.0, 10.0),  # FIXED: Realistic timeouts in seconds
+                 heartbeat_interval: float = 1.0):  # FIXED: Reasonable heartbeat interval in seconds
         """
         Initialize Raft node
         
@@ -45,8 +45,8 @@ class RaftNode:
             node_id: Unique identifier for this node
             cluster_config: Dict mapping node_id to address (host:port)
             state_dir: Directory for persistent state storage
-            election_timeout_range: Min and max election timeout in milliseconds
-            heartbeat_interval: Interval for leader heartbeats in milliseconds
+            election_timeout_range: Min and max election timeout in seconds
+            heartbeat_interval: Interval for leader heartbeats in seconds
         """
         self.node_id = node_id
         self.cluster_config = cluster_config
@@ -60,9 +60,9 @@ class RaftNode:
         self.rpc_handler = RaftRPCHandler(self)
         self.batched_append = BatchedAppendEntries(self.rpc_client)
         
-        # Timing configuration - convert milliseconds to seconds
-        self.election_timeout_range = (election_timeout_range[0] / 1000, election_timeout_range[1] / 1000)
-        self.heartbeat_interval = heartbeat_interval / 1000
+        # Timing configuration - now using seconds directly
+        self.election_timeout_range = election_timeout_range
+        self.heartbeat_interval = heartbeat_interval
         
         # Runtime state
         self.current_leader: Optional[str] = None
@@ -77,10 +77,10 @@ class RaftNode:
         self._shutdown_event = asyncio.Event()
         
         # FIXED: Add randomized startup delay to prevent simultaneous elections
-        self._startup_delay = random.uniform(0.5, 3.0)
+        self._startup_delay = random.uniform(1.0, 3.0)  # Increased startup delay
         
         logger.info(f"Initialized RaftNode {node_id} with {len(cluster_config)} nodes in cluster")
-        logger.info(f"Election timeout range: {self.election_timeout_range}, Heartbeat interval: {self.heartbeat_interval}")
+        logger.info(f"Election timeout range: {self.election_timeout_range[0]:.1f}-{self.election_timeout_range[1]:.1f}s, Heartbeat interval: {self.heartbeat_interval:.1f}s")
         logger.info(f"Startup delay: {self._startup_delay:.2f}s")
     
     async def start(self):
@@ -198,10 +198,10 @@ class RaftNode:
             self.election_timer_task.cancel()
         
         if self.running and self.state.state != RaftNodeState.LEADER.value:
-            # FIXED: Use node-specific randomization to prevent split votes
+            # Use proper randomization to prevent split votes  
             base_timeout = random.uniform(*self.election_timeout_range)
             # Add a node-specific offset to spread out elections even more
-            node_offset = hash(self.node_id) % 50 / 1000  # 0-50ms offset based on node ID
+            node_offset = hash(self.node_id) % 1000 / 1000  # 0-1s offset based on node ID
             timeout = base_timeout + node_offset
             
             logger.debug(f"Setting election timeout for {self.node_id}: {timeout:.3f}s")
@@ -224,10 +224,20 @@ class RaftNode:
         """Run leader election"""
         logger.info(f"Node {self.node_id} _run_election method starting")
         try:
-            # Increment current term and vote for self
+            # Increment current term and vote for self with timeout handling
             logger.info(f"Node {self.node_id} updating term and voting for self")
-            await self.state.update_term(self.state.current_term + 1)
-            await self.state.record_vote(self.node_id)
+            
+            try:
+                # Use lock-free methods for elections to prevent deadlocks
+                await self.state.update_term_for_election(self.state.current_term + 1)
+                await self.state.record_vote_for_election(self.node_id)
+            except Exception as e:
+                logger.error(f"Node {self.node_id} failed during lock-free term update/vote: {e}")
+                # If we can't update our own state, transition back to follower and try again
+                if self.state.state == RaftNodeState.CANDIDATE.value:
+                    await asyncio.sleep(random.uniform(1.0, 3.0))
+                    self.transition_to_follower()
+                return
             
             logger.info(f"Node {self.node_id} starting election for term {self.state.current_term}")
             
@@ -251,10 +261,20 @@ class RaftNode:
                     )
                     vote_requests.append(self._request_vote(node_id, request))
             
-            # Wait for votes
+            # Wait for votes with timeout
             if vote_requests:
                 logger.info(f"Node {self.node_id} sending {len(vote_requests)} vote requests")
-                responses = await asyncio.gather(*vote_requests, return_exceptions=True)
+                try:
+                    responses = await asyncio.wait_for(
+                        asyncio.gather(*vote_requests, return_exceptions=True),
+                        timeout=8.0  # Reasonable timeout for vote collection
+                    )
+                except asyncio.TimeoutError:
+                    logger.warning(f"Node {self.node_id} vote collection timed out, retrying later")
+                    if self.state.state == RaftNodeState.CANDIDATE.value:
+                        await asyncio.sleep(random.uniform(0.5, 1.5))
+                        self.transition_to_follower()
+                    return
                 
                 # FIXED: Better logging and error handling
                 none_count = 0
@@ -288,7 +308,11 @@ class RaftNode:
                         # Check if we discovered a higher term
                         if response.term > self.state.current_term:
                             logger.info(f"Node {self.node_id} discovered higher term {response.term}, stepping down")
-                            await self.state.update_term(response.term)
+                            try:
+                                # Use lock-free method for term updates
+                                await self.state.update_term_for_election(response.term)
+                            except Exception as e:
+                                logger.error(f"Node {self.node_id} failed updating to higher term {response.term}: {e}")
                             self.transition_to_follower()
                             return
                     else:
@@ -296,12 +320,12 @@ class RaftNode:
                 
                 logger.info(f"Election results for {self.node_id}: {response_count} valid responses, {none_count} None, {exception_count} exceptions")
                 
-                # Check if we couldn't reach any nodes
+                # FIXED: More aggressive retry for network partitions
                 if response_count == 0:
                     logger.error(f"Node {self.node_id} failed to get any valid responses during election")
                     if self.state.state == RaftNodeState.CANDIDATE.value:
-                        # FIXED: Add small delay before transitioning to prevent rapid cycling
-                        await asyncio.sleep(random.uniform(0.5, 1.5))
+                        # For network partitions, retry more quickly
+                        await asyncio.sleep(random.uniform(0.2, 0.8))
                         self.transition_to_follower()
                     return
             

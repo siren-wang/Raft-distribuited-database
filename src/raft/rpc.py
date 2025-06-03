@@ -174,17 +174,13 @@ class RaftRPCHandler:
                        f"outdated term {request.term} < {current_term}")
             return RequestVoteResponse(term=current_term, vote_granted=False)
         
-        # Update term if necessary - use shorter timeout
+        # Update term if necessary - use lock-free method for elections
         if request.term > current_term:
             try:
-                await asyncio.wait_for(
-                    self.node.state.update_term(request.term),
-                    timeout=2.0  # Short timeout to avoid blocking elections
-                )
+                # Use lock-free method to prevent deadlocks
+                await self.node.state.update_term_for_election(request.term)
                 current_term = self.node.state.current_term
-            except asyncio.TimeoutError:
-                logger.warning(f"Vote handler timed out updating term from {request.candidate_id}, rejecting vote")
-                return RequestVoteResponse(term=current_term, vote_granted=False)
+                logger.info(f"Updated term to {request.term} for vote from {request.candidate_id} (lock-free)")
             except Exception as e:
                 logger.error(f"Failed to update term in vote handler: {e}")
                 return RequestVoteResponse(term=current_term, vote_granted=False)
@@ -212,18 +208,12 @@ class RaftRPCHandler:
         
         # FIXED: Allow votes for empty logs to help initial leader election
         if last_log_index == 0 or log_is_current:
-            # Grant vote - use a shorter timeout to avoid blocking elections
+            # Grant vote - use lock-free method to avoid blocking elections
             try:
-                await asyncio.wait_for(
-                    self.node.state.record_vote(request.candidate_id),
-                    timeout=2.0  # Short timeout to avoid blocking elections
-                )
+                await self.node.state.record_vote_for_election(request.candidate_id)
                 self.node.reset_election_timer()
-                logger.info(f"Node {self.node.node_id} granted vote to {request.candidate_id} for term {request.term}")
+                logger.info(f"Node {self.node.node_id} granted vote to {request.candidate_id} for term {request.term} (lock-free)")
                 return RequestVoteResponse(term=self.node.state.current_term, vote_granted=True)
-            except asyncio.TimeoutError:
-                logger.warning(f"Vote handler timed out recording vote for {request.candidate_id}, rejecting vote")
-                return RequestVoteResponse(term=current_term, vote_granted=False)
             except Exception as e:
                 logger.error(f"Failed to record vote in vote handler: {e}")
                 return RequestVoteResponse(term=current_term, vote_granted=False)

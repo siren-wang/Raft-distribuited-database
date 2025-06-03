@@ -57,7 +57,9 @@ class RaftKVStore:
                  cluster_config: Dict[str, str],
                  db_config: DatabaseConfig,
                  state_dir: str = "./raft_state",
-                 wal_dir: str = "./raft_wal"):
+                 wal_dir: str = "./raft_wal",
+                 election_timeout_range: tuple = (5.0, 10.0),
+                 heartbeat_interval: float = 1.0):
         """
         Initialize Raft-based KV store
         
@@ -67,12 +69,20 @@ class RaftKVStore:
             db_config: Database configuration for local KV store
             state_dir: Directory for Raft state
             wal_dir: Directory for Write-Ahead Log
+            election_timeout_range: Min and max election timeout in seconds
+            heartbeat_interval: Heartbeat interval in seconds
         """
         self.node_id = node_id
         self.cluster_config = cluster_config
         
-        # Initialize components
-        self.raft_node = RaftNode(node_id, cluster_config, state_dir)
+        # Initialize components with timeout parameters
+        self.raft_node = RaftNode(
+            node_id, 
+            cluster_config, 
+            state_dir,
+            election_timeout_range=election_timeout_range,
+            heartbeat_interval=heartbeat_interval
+        )
         self.wal = WriteAheadLog(node_id, wal_dir)
         self.kv_store = KeyValueStore(db_config)
         
@@ -83,6 +93,7 @@ class RaftKVStore:
         self.pending_operations: Dict[str, asyncio.Future] = {}
         
         logger.info(f"Initialized RaftKVStore for node {node_id}")
+        logger.info(f"Timeout config: election={election_timeout_range}, heartbeat={heartbeat_interval}s")
     
     async def start(self):
         """Start the Raft KV store"""

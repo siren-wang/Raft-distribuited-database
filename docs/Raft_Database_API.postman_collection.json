@@ -1,0 +1,523 @@
+{
+  "info": {
+    "name": "Raft Distributed Database API",
+    "description": "API collection for testing the Raft distributed key-value store",
+    "schema": "https://schema.getpostman.com/json/collection/v2.1.0/collection.json",
+    "_postman_id": "raft-db-api-collection"
+  },
+  "variable": [
+    {
+      "key": "base_url",
+      "value": "http://localhost:8001",
+      "description": "Base URL for Raft API (change to 8002 or 8003 for other nodes)"
+    },
+    {
+      "key": "test_key",
+      "value": "user:123",
+      "description": "Test key for demonstrations"
+    }
+  ],
+  "item": [
+    {
+      "name": "Cluster Monitoring",
+      "item": [
+        {
+          "name": "Get Cluster Status",
+          "request": {
+            "method": "GET",
+            "header": [],
+            "url": {
+              "raw": "{{base_url}}/raft/status",
+              "host": ["{{base_url}}"],
+              "path": ["raft", "status"]
+            },
+            "description": "Get the current status of the Raft cluster node"
+          },
+          "response": []
+        },
+        {
+          "name": "Get Debug Information",
+          "request": {
+            "method": "GET",
+            "header": [],
+            "url": {
+              "raw": "{{base_url}}/raft/debug",
+              "host": ["{{base_url}}"],
+              "path": ["raft", "debug"]
+            },
+            "description": "Get detailed debug information including log entries and internal state"
+          },
+          "response": []
+        }
+      ],
+      "description": "Endpoints for monitoring cluster health and status"
+    },
+    {
+      "name": "Key-Value Operations",
+      "item": [
+        {
+          "name": "Store a Value (PUT)",
+          "request": {
+            "method": "PUT",
+            "header": [
+              {
+                "key": "Content-Type",
+                "value": "application/json"
+              }
+            ],
+            "body": {
+              "mode": "raw",
+              "raw": "{\n  \"value\": {\n    \"name\": \"John Doe\",\n    \"email\": \"john@example.com\",\n    \"age\": 30,\n    \"department\": \"Engineering\"\n  }\n}"
+            },
+            "url": {
+              "raw": "{{base_url}}/kv/{{test_key}}",
+              "host": ["{{base_url}}"],
+              "path": ["kv", "{{test_key}}"]
+            },
+            "description": "Store a new value or update an existing one"
+          },
+          "response": []
+        },
+        {
+          "name": "Get a Value",
+          "request": {
+            "method": "GET",
+            "header": [],
+            "url": {
+              "raw": "{{base_url}}/kv/{{test_key}}?linearizable=true",
+              "host": ["{{base_url}}"],
+              "path": ["kv", "{{test_key}}"],
+              "query": [
+                {
+                  "key": "linearizable",
+                  "value": "true",
+                  "description": "Ensure linearizable reads"
+                }
+              ]
+            },
+            "description": "Retrieve a value by key from the distributed store"
+          },
+          "response": []
+        },
+        {
+          "name": "Update with Version Check (POST)",
+          "request": {
+            "method": "POST",
+            "header": [
+              {
+                "key": "Content-Type",
+                "value": "application/json"
+              }
+            ],
+            "body": {
+              "mode": "raw",
+              "raw": "{\n  \"value\": {\n    \"name\": \"Jane Doe\",\n    \"email\": \"jane@example.com\",\n    \"age\": 28,\n    \"department\": \"Product\"\n  },\n  \"version\": 1\n}"
+            },
+            "url": {
+              "raw": "{{base_url}}/kv/{{test_key}}",
+              "host": ["{{base_url}}"],
+              "path": ["kv", "{{test_key}}"]
+            },
+            "description": "Update an existing value with optimistic locking using version check"
+          },
+          "response": []
+        },
+        {
+          "name": "Delete a Key",
+          "request": {
+            "method": "DELETE",
+            "header": [],
+            "url": {
+              "raw": "{{base_url}}/kv/{{test_key}}",
+              "host": ["{{base_url}}"],
+              "path": ["kv", "{{test_key}}"]
+            },
+            "description": "Delete a key-value pair from the distributed store"
+          },
+          "response": []
+        }
+      ],
+      "description": "CRUD operations for the distributed key-value store"
+    },
+    {
+      "name": "Test Scenarios",
+      "item": [
+        {
+          "name": "Store Multiple Users",
+          "item": [
+            {
+              "name": "Store User 1",
+              "request": {
+                "method": "PUT",
+                "header": [
+                  {
+                    "key": "Content-Type",
+                    "value": "application/json"
+                  }
+                ],
+                "body": {
+                  "mode": "raw",
+                  "raw": "{\n  \"value\": {\n    \"name\": \"Alice Johnson\",\n    \"email\": \"alice@company.com\",\n    \"role\": \"Software Engineer\",\n    \"team\": \"Backend\"\n  }\n}"
+                },
+                "url": {
+                  "raw": "{{base_url}}/kv/user:alice",
+                  "host": ["{{base_url}}"],
+                  "path": ["kv", "user:alice"]
+                }
+              },
+              "response": []
+            },
+            {
+              "name": "Store User 2",
+              "request": {
+                "method": "PUT",
+                "header": [
+                  {
+                    "key": "Content-Type",
+                    "value": "application/json"
+                  }
+                ],
+                "body": {
+                  "mode": "raw",
+                  "raw": "{\n  \"value\": {\n    \"name\": \"Bob Smith\",\n    \"email\": \"bob@company.com\",\n    \"role\": \"Product Manager\",\n    \"team\": \"Product\"\n  }\n}"
+                },
+                "url": {
+                  "raw": "{{base_url}}/kv/user:bob",
+                  "host": ["{{base_url}}"],
+                  "path": ["kv", "user:bob"]
+                }
+              },
+              "response": []
+            },
+            {
+              "name": "Store User 3",
+              "request": {
+                "method": "PUT",
+                "header": [
+                  {
+                    "key": "Content-Type",
+                    "value": "application/json"
+                  }
+                ],
+                "body": {
+                  "mode": "raw",
+                  "raw": "{\n  \"value\": {\n    \"name\": \"Carol Davis\",\n    \"email\": \"carol@company.com\",\n    \"role\": \"DevOps Engineer\",\n    \"team\": \"Infrastructure\"\n  }\n}"
+                },
+                "url": {
+                  "raw": "{{base_url}}/kv/user:carol",
+                  "host": ["{{base_url}}"],
+                  "path": ["kv", "user:carol"]
+                }
+              },
+              "response": []
+            }
+          ],
+          "description": "Store multiple user records for testing"
+        },
+        {
+          "name": "Configuration Management",
+          "item": [
+            {
+              "name": "Store App Config",
+              "request": {
+                "method": "PUT",
+                "header": [
+                  {
+                    "key": "Content-Type",
+                    "value": "application/json"
+                  }
+                ],
+                "body": {
+                  "mode": "raw",
+                  "raw": "{\n  \"value\": {\n    \"app_name\": \"Raft Demo App\",\n    \"version\": \"1.0.0\",\n    \"database_url\": \"postgres://localhost:5432/app\",\n    \"debug_mode\": true,\n    \"max_connections\": 100\n  }\n}"
+                },
+                "url": {
+                  "raw": "{{base_url}}/kv/config:app",
+                  "host": ["{{base_url}}"],
+                  "path": ["kv", "config:app"]
+                }
+              },
+              "response": []
+            },
+            {
+              "name": "Update Config Setting",
+              "request": {
+                "method": "POST",
+                "header": [
+                  {
+                    "key": "Content-Type",
+                    "value": "application/json"
+                  }
+                ],
+                "body": {
+                  "mode": "raw",
+                  "raw": "{\n  \"value\": {\n    \"app_name\": \"Raft Demo App\",\n    \"version\": \"1.1.0\",\n    \"database_url\": \"postgres://localhost:5432/app\",\n    \"debug_mode\": false,\n    \"max_connections\": 200\n  },\n  \"version\": 1\n}"
+                },
+                "url": {
+                  "raw": "{{base_url}}/kv/config:app",
+                  "host": ["{{base_url}}"],
+                  "path": ["kv", "config:app"]
+                }
+              },
+              "response": []
+            },
+            {
+              "name": "Get Current Config",
+              "request": {
+                "method": "GET",
+                "header": [],
+                "url": {
+                  "raw": "{{base_url}}/kv/config:app",
+                  "host": ["{{base_url}}"],
+                  "path": ["kv", "config:app"]
+                }
+              },
+              "response": []
+            }
+          ],
+          "description": "Configuration management use case"
+        },
+        {
+          "name": "Session Management",
+          "item": [
+            {
+              "name": "Create Session",
+              "request": {
+                "method": "PUT",
+                "header": [
+                  {
+                    "key": "Content-Type",
+                    "value": "application/json"
+                  }
+                ],
+                "body": {
+                  "mode": "raw",
+                  "raw": "{\n  \"value\": {\n    \"user_id\": \"alice\",\n    \"session_id\": \"sess_abc123\",\n    \"created_at\": \"2023-12-07T10:00:00Z\",\n    \"expires_at\": \"2023-12-07T18:00:00Z\",\n    \"ip_address\": \"192.168.1.100\",\n    \"user_agent\": \"Mozilla/5.0...\"\n  }\n}"
+                },
+                "url": {
+                  "raw": "{{base_url}}/kv/session:sess_abc123",
+                  "host": ["{{base_url}}"],
+                  "path": ["kv", "session:sess_abc123"]
+                }
+              },
+              "response": []
+            },
+            {
+              "name": "Get Session",
+              "request": {
+                "method": "GET",
+                "header": [],
+                "url": {
+                  "raw": "{{base_url}}/kv/session:sess_abc123",
+                  "host": ["{{base_url}}"],
+                  "path": ["kv", "session:sess_abc123"]
+                }
+              },
+              "response": []
+            },
+            {
+              "name": "Delete Session (Logout)",
+              "request": {
+                "method": "DELETE",
+                "header": [],
+                "url": {
+                  "raw": "{{base_url}}/kv/session:sess_abc123",
+                  "host": ["{{base_url}}"],
+                  "path": ["kv", "session:sess_abc123"]
+                }
+              },
+              "response": []
+            }
+          ],
+          "description": "Session management use case"
+        }
+      ],
+      "description": "Complete test scenarios demonstrating real-world use cases"
+    },
+    {
+      "name": "Multi-Node Testing",
+      "item": [
+        {
+          "name": "Check Node 1 Status",
+          "request": {
+            "method": "GET",
+            "header": [],
+            "url": {
+              "raw": "http://localhost:8001/raft/status",
+              "protocol": "http",
+              "host": ["localhost"],
+              "port": "8001",
+              "path": ["raft", "status"]
+            }
+          },
+          "response": []
+        },
+        {
+          "name": "Check Node 2 Status",
+          "request": {
+            "method": "GET",
+            "header": [],
+            "url": {
+              "raw": "http://localhost:8002/raft/status",
+              "protocol": "http",
+              "host": ["localhost"],
+              "port": "8002",
+              "path": ["raft", "status"]
+            }
+          },
+          "response": []
+        },
+        {
+          "name": "Check Node 3 Status",
+          "request": {
+            "method": "GET",
+            "header": [],
+            "url": {
+              "raw": "http://localhost:8003/raft/status",
+              "protocol": "http",
+              "host": ["localhost"],
+              "port": "8003",
+              "path": ["raft", "status"]
+            }
+          },
+          "response": []
+        },
+        {
+          "name": "Write to Node 1",
+          "request": {
+            "method": "PUT",
+            "header": [
+              {
+                "key": "Content-Type",
+                "value": "application/json"
+              }
+            ],
+            "body": {
+              "mode": "raw",
+              "raw": "{\n  \"value\": {\n    \"written_to\": \"node1\",\n    \"timestamp\": \"{{$timestamp}}\",\n    \"data\": \"test data from node 1\"\n  }\n}"
+            },
+            "url": {
+              "raw": "http://localhost:8001/kv/multi-node-test",
+              "protocol": "http",
+              "host": ["localhost"],
+              "port": "8001",
+              "path": ["kv", "multi-node-test"]
+            }
+          },
+          "response": []
+        },
+        {
+          "name": "Read from Node 2",
+          "request": {
+            "method": "GET",
+            "header": [],
+            "url": {
+              "raw": "http://localhost:8002/kv/multi-node-test",
+              "protocol": "http",
+              "host": ["localhost"],
+              "port": "8002",
+              "path": ["kv", "multi-node-test"]
+            },
+            "description": "Read the value written to Node 1 from Node 2 to verify replication"
+          },
+          "response": []
+        },
+        {
+          "name": "Read from Node 3",
+          "request": {
+            "method": "GET",
+            "header": [],
+            "url": {
+              "raw": "http://localhost:8003/kv/multi-node-test",
+              "protocol": "http",
+              "host": ["localhost"],
+              "port": "8003",
+              "path": ["kv", "multi-node-test"]
+            },
+            "description": "Read the value written to Node 1 from Node 3 to verify replication"
+          },
+          "response": []
+        }
+      ],
+      "description": "Test requests across multiple nodes to verify replication and consensus"
+    },
+    {
+      "name": "Error Scenarios",
+      "item": [
+        {
+          "name": "Get Non-existent Key",
+          "request": {
+            "method": "GET",
+            "header": [],
+            "url": {
+              "raw": "{{base_url}}/kv/non-existent-key",
+              "host": ["{{base_url}}"],
+              "path": ["kv", "non-existent-key"]
+            },
+            "description": "Should return 404 error"
+          },
+          "response": []
+        },
+        {
+          "name": "Update with Wrong Version",
+          "request": {
+            "method": "POST",
+            "header": [
+              {
+                "key": "Content-Type",
+                "value": "application/json"
+              }
+            ],
+            "body": {
+              "mode": "raw",
+              "raw": "{\n  \"value\": {\n    \"name\": \"Updated Name\"\n  },\n  \"version\": 999\n}"
+            },
+            "url": {
+              "raw": "{{base_url}}/kv/{{test_key}}",
+              "host": ["{{base_url}}"],
+              "path": ["kv", "{{test_key}}"]
+            },
+            "description": "Should return version conflict error"
+          },
+          "response": []
+        },
+        {
+          "name": "Invalid JSON Body",
+          "request": {
+            "method": "PUT",
+            "header": [
+              {
+                "key": "Content-Type",
+                "value": "application/json"
+              }
+            ],
+            "body": {
+              "mode": "raw",
+              "raw": "{\n  \"invalid\": json syntax\n}"
+            },
+            "url": {
+              "raw": "{{base_url}}/kv/test-invalid",
+              "host": ["{{base_url}}"],
+              "path": ["kv", "test-invalid"]
+            },
+            "description": "Should return 400 bad request"
+          },
+          "response": []
+        }
+      ],
+      "description": "Test error handling and edge cases"
+    }
+  ],
+  "event": [
+    {
+      "listen": "prerequest",
+      "script": {
+        "type": "text/javascript",
+        "exec": [
+          "// Set dynamic timestamp for requests",
+          "pm.globals.set('timestamp', new Date().toISOString());"
+        ]
+      }
+    }
+  ]
+} 

@@ -1,0 +1,620 @@
+openapi: 3.0.3
+info:
+  title: Raft Distributed Database API
+  description: |
+    A distributed, fault-tolerant key-value store using the Raft consensus algorithm.
+    
+    This API provides:
+    - Distributed key-value operations with strong consistency
+    - Automatic leader election and failover
+    - Cluster status monitoring and debugging
+    - Internal Raft protocol endpoints
+    
+    The system consists of multiple nodes (typically 3 or 5) that replicate data
+    using the Raft consensus protocol to ensure fault tolerance and consistency.
+  version: 1.0.0
+  contact:
+    name: Raft Database API
+    email: support@example.com
+  license:
+    name: MIT
+    url: https://opensource.org/licenses/MIT
+
+servers:
+  - url: http://localhost:8001
+    description: Node 1 (Development)
+  - url: http://localhost:8002
+    description: Node 2 (Development)
+  - url: http://localhost:8003
+    description: Node 3 (Development)
+
+paths:
+  /raft/status:
+    get:
+      summary: Get cluster status
+      description: Returns the current status of this Raft node and cluster information
+      tags:
+        - Cluster Status
+      responses:
+        '200':
+          description: Cluster status information
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/ClusterStatus'
+              example:
+                node_id: "node1"
+                state: "leader"
+                current_term: 5
+                current_leader: "node1"
+                log_length: 42
+                commit_index: 41
+                last_applied: 41
+                cluster_size: 3
+                wal_stats:
+                  total_entries: 42
+                  last_index: 42
+                  size_bytes: 15360
+
+  /raft/debug:
+    get:
+      summary: Get detailed debug information
+      description: Returns comprehensive debug information including log entries, indices, and internal state
+      tags:
+        - Cluster Status
+      responses:
+        '200':
+          description: Detailed debug information
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/DebugInfo'
+
+  /kv/{key}:
+    get:
+      summary: Get value by key
+      description: Retrieve a value from the distributed store by key
+      tags:
+        - Key-Value Operations
+      parameters:
+        - name: key
+          in: path
+          required: true
+          description: The key to retrieve
+          schema:
+            type: string
+          example: "user:123"
+        - name: linearizable
+          in: query
+          required: false
+          description: Whether to ensure linearizable reads (default: true)
+          schema:
+            type: boolean
+            default: true
+      responses:
+        '200':
+          description: Value retrieved successfully
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/KVResponse'
+              example:
+                key: "user:123"
+                value:
+                  name: "John Doe"
+                  email: "john@example.com"
+                version: 3
+                created_at: "2023-12-07T10:00:00Z"
+                updated_at: "2023-12-07T10:30:00Z"
+        '404':
+          description: Key not found
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/ErrorResponse'
+              example:
+                detail: "Key 'user:123' not found"
+        '500':
+          description: Internal server error
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/ErrorResponse'
+
+    put:
+      summary: Store or update a value
+      description: Store a new value or update an existing one in the distributed store
+      tags:
+        - Key-Value Operations
+      parameters:
+        - name: key
+          in: path
+          required: true
+          description: The key to store
+          schema:
+            type: string
+          example: "user:123"
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema:
+              $ref: '#/components/schemas/KVRequest'
+            example:
+              value:
+                name: "John Doe"
+                email: "john@example.com"
+      responses:
+        '200':
+          description: Value stored successfully
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/KVResponse'
+              example:
+                key: "user:123"
+                value:
+                  name: "John Doe"
+                  email: "john@example.com"
+                version: 1
+                created_at: "2023-12-07T10:30:00Z"
+                updated_at: "2023-12-07T10:30:00Z"
+        '500':
+          description: Internal server error
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/ErrorResponse'
+
+    post:
+      summary: Update value with version check
+      description: Update an existing value with optimistic locking using version check
+      tags:
+        - Key-Value Operations
+      parameters:
+        - name: key
+          in: path
+          required: true
+          description: The key to update
+          schema:
+            type: string
+          example: "user:123"
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema:
+              $ref: '#/components/schemas/KVUpdateRequest'
+            example:
+              value:
+                name: "Jane Doe"
+                email: "jane@example.com"
+              version: 3
+      responses:
+        '200':
+          description: Value updated successfully
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/KVResponse'
+              example:
+                key: "user:123"
+                value:
+                  name: "Jane Doe"
+                  email: "jane@example.com"
+                version: 4
+                created_at: "2023-12-07T10:00:00Z"
+                updated_at: "2023-12-07T10:35:00Z"
+        '409':
+          description: Version conflict
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/ErrorResponse'
+              example:
+                detail: "Version conflict: expected 3, got 4"
+        '404':
+          description: Key not found
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/ErrorResponse'
+        '500':
+          description: Internal server error
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/ErrorResponse'
+
+    delete:
+      summary: Delete a key
+      description: Delete a key-value pair from the distributed store
+      tags:
+        - Key-Value Operations
+      parameters:
+        - name: key
+          in: path
+          required: true
+          description: The key to delete
+          schema:
+            type: string
+          example: "user:123"
+      responses:
+        '200':
+          description: Key deleted successfully or didn't exist
+          content:
+            application/json:
+              schema:
+                oneOf:
+                  - $ref: '#/components/schemas/KVResponse'
+                  - $ref: '#/components/schemas/DeleteResponse'
+              examples:
+                deleted_existing:
+                  summary: Deleted existing key
+                  value:
+                    key: "user:123"
+                    value:
+                      name: "Jane Doe"
+                      email: "jane@example.com"
+                    version: 4
+                    created_at: "2023-12-07T10:00:00Z"
+                    updated_at: "2023-12-07T10:35:00Z"
+                deleted_nonexistent:
+                  summary: Key didn't exist
+                  value:
+                    deleted: true
+        '500':
+          description: Internal server error
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/ErrorResponse'
+
+  /raft/request_vote:
+    post:
+      summary: Handle RequestVote RPC (Internal)
+      description: Internal Raft protocol endpoint for handling vote requests during leader election
+      tags:
+        - Internal Raft Protocol
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema:
+              $ref: '#/components/schemas/RequestVoteRequest'
+      responses:
+        '200':
+          description: Vote response
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/RequestVoteResponse'
+
+  /raft/append_entries:
+    post:
+      summary: Handle AppendEntries RPC (Internal)
+      description: Internal Raft protocol endpoint for log replication and heartbeats
+      tags:
+        - Internal Raft Protocol
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema:
+              $ref: '#/components/schemas/AppendEntriesRequest'
+      responses:
+        '200':
+          description: Append entries response
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/AppendEntriesResponse'
+
+components:
+  schemas:
+    ClusterStatus:
+      type: object
+      description: Current status of the Raft cluster node
+      properties:
+        node_id:
+          type: string
+          description: Unique identifier for this node
+          example: "node1"
+        state:
+          type: string
+          enum: [leader, follower, candidate]
+          description: Current Raft state of this node
+          example: "leader"
+        current_term:
+          type: integer
+          description: Current election term
+          example: 5
+        current_leader:
+          type: string
+          nullable: true
+          description: ID of the current leader (null if no leader)
+          example: "node1"
+        log_length:
+          type: integer
+          description: Number of entries in the log
+          example: 42
+        commit_index:
+          type: integer
+          description: Index of the highest committed log entry
+          example: 41
+        last_applied:
+          type: integer
+          description: Index of the highest applied log entry
+          example: 41
+        cluster_size:
+          type: integer
+          description: Total number of nodes in the cluster
+          example: 3
+        wal_stats:
+          type: object
+          description: Write-Ahead Log statistics
+          properties:
+            total_entries:
+              type: integer
+              description: Total number of WAL entries
+            last_index:
+              type: integer
+              description: Index of the last WAL entry
+            size_bytes:
+              type: integer
+              description: Total size of WAL in bytes
+      required:
+        - node_id
+        - state
+        - current_term
+        - log_length
+        - commit_index
+        - last_applied
+        - cluster_size
+
+    DebugInfo:
+      type: object
+      description: Detailed debug information for the Raft node
+      properties:
+        node_id:
+          type: string
+          example: "node1"
+        state:
+          type: string
+          enum: [leader, follower, candidate]
+          example: "leader"
+        current_term:
+          type: integer
+          example: 5
+        voted_for:
+          type: string
+          nullable: true
+          example: "node1"
+        current_leader:
+          type: string
+          nullable: true
+          example: "node1"
+        log_length:
+          type: integer
+          example: 42
+        last_log_index:
+          type: integer
+          example: 42
+        last_log_term:
+          type: integer
+          example: 5
+        commit_index:
+          type: integer
+          example: 41
+        last_applied:
+          type: integer
+          example: 41
+        next_index:
+          type: object
+          description: Next log index to send to each peer
+          additionalProperties:
+            type: integer
+          example:
+            node2: 43
+            node3: 43
+        match_index:
+          type: object
+          description: Highest log index replicated to each peer
+          additionalProperties:
+            type: integer
+          example:
+            node2: 42
+            node3: 42
+        log_entries:
+          type: array
+          description: Recent log entries (last 10)
+          items:
+            type: object
+            properties:
+              index:
+                type: integer
+              term:
+                type: integer
+              command_type:
+                type: string
+      required:
+        - node_id
+        - state
+        - current_term
+        - log_length
+        - commit_index
+        - last_applied
+
+    KVRequest:
+      type: object
+      description: Request to store a key-value pair
+      properties:
+        value:
+          description: The value to store (can be any JSON-serializable type)
+          example:
+            name: "John Doe"
+            email: "john@example.com"
+      required:
+        - value
+
+    KVUpdateRequest:
+      type: object
+      description: Request to update a key-value pair with version check
+      properties:
+        value:
+          description: The new value to store
+          example:
+            name: "Jane Doe"
+            email: "jane@example.com"
+        version:
+          type: integer
+          description: Expected current version for optimistic locking
+          example: 3
+      required:
+        - value
+        - version
+
+    KVResponse:
+      type: object
+      description: Response containing key-value data
+      properties:
+        key:
+          type: string
+          description: The key
+          example: "user:123"
+        value:
+          description: The stored value
+          example:
+            name: "John Doe"
+            email: "john@example.com"
+        version:
+          type: integer
+          description: Current version of the value
+          example: 1
+        created_at:
+          type: string
+          format: date-time
+          nullable: true
+          description: When the key was first created
+          example: "2023-12-07T10:30:00Z"
+        updated_at:
+          type: string
+          format: date-time
+          nullable: true
+          description: When the key was last updated
+          example: "2023-12-07T10:30:00Z"
+      required:
+        - key
+        - value
+        - version
+
+    DeleteResponse:
+      type: object
+      description: Response when deleting a non-existent key
+      properties:
+        deleted:
+          type: boolean
+          example: true
+      required:
+        - deleted
+
+    ErrorResponse:
+      type: object
+      description: Error response
+      properties:
+        detail:
+          type: string
+          description: Error message
+          example: "Key 'user:123' not found"
+      required:
+        - detail
+
+    RequestVoteRequest:
+      type: object
+      description: Raft RequestVote RPC request
+      properties:
+        term:
+          type: integer
+          description: Candidate's election term
+        candidate_id:
+          type: string
+          description: ID of the candidate requesting vote
+        last_log_index:
+          type: integer
+          description: Index of candidate's last log entry
+        last_log_term:
+          type: integer
+          description: Term of candidate's last log entry
+      required:
+        - term
+        - candidate_id
+        - last_log_index
+        - last_log_term
+
+    RequestVoteResponse:
+      type: object
+      description: Raft RequestVote RPC response
+      properties:
+        term:
+          type: integer
+          description: Current term for candidate to update itself
+        vote_granted:
+          type: boolean
+          description: True if candidate received vote
+      required:
+        - term
+        - vote_granted
+
+    AppendEntriesRequest:
+      type: object
+      description: Raft AppendEntries RPC request
+      properties:
+        term:
+          type: integer
+          description: Leader's term
+        leader_id:
+          type: string
+          description: ID of the leader
+        prev_log_index:
+          type: integer
+          description: Index of log entry immediately preceding new ones
+        prev_log_term:
+          type: integer
+          description: Term of prev_log_index entry
+        entries:
+          type: array
+          description: Log entries to store (empty for heartbeat)
+          items:
+            type: object
+        leader_commit:
+          type: integer
+          description: Leader's commit index
+      required:
+        - term
+        - leader_id
+        - prev_log_index
+        - prev_log_term
+        - entries
+        - leader_commit
+
+    AppendEntriesResponse:
+      type: object
+      description: Raft AppendEntries RPC response
+      properties:
+        term:
+          type: integer
+          description: Current term for leader to update itself
+        success:
+          type: boolean
+          description: True if follower contained entry matching prev_log_index and prev_log_term
+      required:
+        - term
+        - success
+
+tags:
+  - name: Key-Value Operations
+    description: Operations for storing, retrieving, updating, and deleting key-value pairs
+  - name: Cluster Status
+    description: Endpoints for monitoring cluster health and status
+  - name: Internal Raft Protocol
+    description: Internal endpoints used by Raft nodes for consensus protocol communication 

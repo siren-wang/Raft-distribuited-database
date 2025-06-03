@@ -180,6 +180,23 @@ class RaftState:
         await self._save_persistent_state()
         logger.info(f"Voted for {candidate_id} in term {self.current_term}")
 
+    async def update_term_for_election(self, new_term: int):
+        """Lock-free term update specifically for elections to prevent deadlocks"""
+        logger.debug(f"Node {self.node_id} update_term_for_election called: {self.current_term} -> {new_term}")
+        if new_term > self.current_term:
+            logger.debug(f"Node {self.node_id} updating term from {self.current_term} to {new_term} (lock-free)")
+            self.current_term = new_term
+            self.voted_for = None
+            logger.info(f"Updated term to {new_term} (lock-free for election)")
+        else:
+            logger.debug(f"Node {self.node_id} not updating term: {new_term} <= {self.current_term}")
+
+    async def record_vote_for_election(self, candidate_id: str):
+        """Lock-free vote recording specifically for elections to prevent deadlocks"""
+        logger.debug(f"Node {self.node_id} record_vote_for_election called for {candidate_id}")
+        self.voted_for = candidate_id
+        logger.info(f"Voted for {candidate_id} in term {self.current_term} (lock-free for election)")
+
     async def update_term(self, new_term: int):
         """Update current term and reset voted_for"""
         logger.debug(f"Node {self.node_id} update_term called: {self.current_term} -> {new_term}")
@@ -193,10 +210,10 @@ class RaftState:
                 logger.debug(f"Node {self.node_id} about to release state lock in update_term")
         
         try:
-            await asyncio.wait_for(_do_update(), timeout=10.0)  # Reduced timeout
+            await asyncio.wait_for(_do_update(), timeout=3.0)  # Much shorter timeout
             logger.debug(f"Node {self.node_id} successfully completed update_term")
         except asyncio.TimeoutError:
-            logger.error(f"Node {self.node_id} update_term timed out after 10 seconds")
+            logger.error(f"Node {self.node_id} update_term timed out after 3 seconds")
             raise
         except Exception as e:
             logger.error(f"Node {self.node_id} update_term failed: {e}", exc_info=True)
@@ -215,10 +232,10 @@ class RaftState:
                 logger.debug(f"Node {self.node_id} about to release state lock in record_vote")
         
         try:
-            await asyncio.wait_for(_do_vote(), timeout=10.0)  # Reduced timeout
+            await asyncio.wait_for(_do_vote(), timeout=3.0)  # Much shorter timeout
             logger.debug(f"Node {self.node_id} successfully completed record_vote")
         except asyncio.TimeoutError:
-            logger.error(f"Node {self.node_id} record_vote timed out after 10 seconds")
+            logger.error(f"Node {self.node_id} record_vote timed out after 3 seconds")
             raise
         except Exception as e:
             logger.error(f"Node {self.node_id} record_vote failed: {e}", exc_info=True)

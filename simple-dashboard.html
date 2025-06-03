@@ -206,7 +206,8 @@
                             status: 'healthy',
                             port: ports[i]
                         });
-                        addLogEntry(`✅ ${data.node_id}: ${data.state} (term ${data.current_term})`);
+                        // Only log individual node status, not leader claims
+                        addLogEntry(`📊 ${data.node_id}: ${data.state} (term ${data.current_term})`);
                     } else {
                         throw new Error(`HTTP ${response.status}`);
                     }
@@ -225,13 +226,59 @@
                 }
             }
 
+            // Determine actual cluster leader from consensus
+            const actualLeader = determineActualLeader(newNodes);
+            
+            // Check for leadership changes
+            const previousLeader = nodes.find(n => n.state === 'leader');
+            const currentLeader = newNodes.find(n => n.state === 'leader');
+            
+            if (previousLeader && currentLeader && previousLeader.id !== currentLeader.id) {
+                addLogEntry(`👑 Leadership changed: ${previousLeader.id} → ${currentLeader.id}`);
+            } else if (!previousLeader && currentLeader) {
+                addLogEntry(`👑 New leader elected: ${currentLeader.id}`);
+            } else if (previousLeader && !currentLeader) {
+                addLogEntry(`⚠️ Leader lost: ${previousLeader.id} (no current leader)`);
+            }
+            
+            // Log consensus-based cluster state
+            if (actualLeader) {
+                const leaderTerm = newNodes.find(n => n.id === actualLeader)?.term || '?';
+                addLogEntry(`✅ Cluster consensus: ${actualLeader} is leader (term ${leaderTerm})`);
+            } else {
+                const candidateCount = newNodes.filter(n => n.state === 'candidate').length;
+                if (candidateCount > 0) {
+                    addLogEntry(`🗳️ Election in progress: ${candidateCount} candidates, no leader`);
+                } else {
+                    addLogEntry(`❓ No leader or candidates found in cluster`);
+                }
+            }
+
             nodes = newNodes;
             updateDisplay();
+        }
+
+        function determineActualLeader(nodeList) {
+            // Find nodes that are actually in leader state (not just claiming leadership)
+            const leadersInState = nodeList.filter(n => n.state === 'leader' && n.status === 'healthy');
+            
+            if (leadersInState.length === 1) {
+                return leadersInState[0].id;
+            } else if (leadersInState.length > 1) {
+                // Multiple leaders - should not happen, but return the one with highest term
+                const sortedByTerm = leadersInState.sort((a, b) => b.term - a.term);
+                return sortedByTerm[0].id;
+            }
+            
+            return null; // No leader found
         }
 
         function updateDisplay() {
             const grid = document.getElementById('cluster-grid');
             grid.innerHTML = '';
+            
+            // Determine the actual leader for display consistency
+            const actualLeader = determineActualLeader(nodes);
 
             nodes.forEach(node => {
                 const card = document.createElement('div');
@@ -239,6 +286,9 @@
                 
                 const statusClass = node.status === 'healthy' ? 'status-healthy' : 'status-offline';
                 const icon = node.state === 'leader' ? '👑' : node.state === 'candidate' ? '🗳️' : '👥';
+                
+                // Show consensus-based leader instead of individual node opinion
+                const displayedLeader = actualLeader || 'None';
                 
                 card.innerHTML = `
                     <div class="node-header">
@@ -255,8 +305,8 @@
                             <span>${node.term}</span>
                         </div>
                         <div class="detail-row">
-                            <span><strong>Leader:</strong></span>
-                            <span>${node.leader}</span>
+                            <span><strong>Cluster Leader:</strong></span>
+                            <span>${displayedLeader}</span>
                         </div>
                         <div class="detail-row">
                             <span><strong>Logs:</strong></span>

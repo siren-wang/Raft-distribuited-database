@@ -46,6 +46,11 @@ class RaftClusterNode:
             password=os.environ.get("DB_PASSWORD", "")
         )
         
+        # Raft timing configuration from environment variables
+        self.election_timeout_min = float(os.environ.get("ELECTION_TIMEOUT_MIN", "5.0"))
+        self.election_timeout_max = float(os.environ.get("ELECTION_TIMEOUT_MAX", "10.0"))
+        self.heartbeat_interval = float(os.environ.get("HEARTBEAT_INTERVAL", "1.0"))
+        
         # State directories
         self.state_dir = os.environ.get("RAFT_STATE_DIR", "./raft_state")
         self.wal_dir = os.environ.get("RAFT_WAL_DIR", "./raft_wal")
@@ -56,6 +61,7 @@ class RaftClusterNode:
         self.server = None
         
         logger.info(f"Initialized RaftClusterNode {self.node_id} on port {self.node_port}")
+        logger.info(f"Raft timing: election_timeout={self.election_timeout_min}-{self.election_timeout_max}s, heartbeat={self.heartbeat_interval}s")
     
     async def start(self):
         """Start the Raft node"""
@@ -67,7 +73,9 @@ class RaftClusterNode:
             cluster_config=self.cluster_config,
             db_config=self.db_config,
             state_dir=self.state_dir,
-            wal_dir=self.wal_dir
+            wal_dir=self.wal_dir,
+            election_timeout_range=(self.election_timeout_min, self.election_timeout_max),
+            heartbeat_interval=self.heartbeat_interval
         )
         
         # Initialize components (but don't start Raft consensus yet)
